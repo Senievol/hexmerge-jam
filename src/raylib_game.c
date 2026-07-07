@@ -20,7 +20,7 @@
 #include <stdlib.h> // Required for:
 #include <string.h> // Required for:
 #include <math.h>   // Required for: fminf(), fmaxf()
-#include <raymath.h> // Required for: Lerp(), Clamp
+#include <raymath.h> // Required for: Lerp(), Clamp()
 
 //----------------------------------------------------------------------------------
 // Defines and Macros
@@ -40,6 +40,12 @@
 #define HEX_SPAWN_MARGIN    40.0f
 #define HEX_SPAWN_MIN_TIME  0.4f
 #define HEX_SPAWN_MAX_TIME  1.0f
+
+#define GRID_TILE_SIZE      26
+#define GRID_HEIGHT         5
+#define GRID_WIDTH          9
+#define GRID_TOP_PARITY     1
+#define GRID_BOTTOM_PARITY  1
 
 //----------------------------------------------------------------------------------
 // Types and Structures Definition
@@ -102,6 +108,9 @@ static const float TRANSITION_DURATION = 0.35f; // seconds per half, out -> in
 static const float hexTierSizes[HEX_TIER_COUNT] = { 16.0f, 23.0f, 32.0f, 45.0f }; // tier 0..3
 static Hex hexes[HEX_MAX_COUNT];
 static float hexSpawnTimer = 0.0f;
+
+Camera2D camera;
+
 // TODO: Define global variables here, recommended to make them static
 
 //----------------------------------------------------------------------------------
@@ -111,8 +120,8 @@ static void UpdateDrawFrame(void); // Update and Draw one frame
 
 // Small math helpers
 static float EaseOutCubic(float t);
-
 static bool GuiSimpleButton(Rectangle bounds, const char *text, int fontSize, float *hoverAnim, bool interactive);
+
 
 // Title screen
 static void UpdateTitleScreen(float dt);
@@ -134,6 +143,11 @@ static void UpdateHexBackground(float dt);
 static void DrawHexBackground(void);
 
 
+// Game screen
+static void DrawHexGrid(void);
+static void DrawOneGridHex(int x, int y);
+static void DrawHexGridRow(int x, int y, int len);
+
 
 //------------------------------------------------------------------------------------
 // Program main entry point
@@ -149,6 +163,11 @@ int main(void)
     InitWindow(screenWidth, screenHeight, "Hexmerge");
 
     // TODO: Load resources / Initialize variables at this point
+    camera = (Camera2D){ 0 };
+    camera.target = (Vector2){ screenWidth/2.0f, screenHeight/2.0f };
+    camera.offset = (Vector2){ screenWidth/2.0f, screenHeight/2.0f };
+    camera.rotation = 0.0f;
+    camera.zoom = 1.0f;
 
     // Render texture to draw, enables screen scaling
     // NOTE: If screen is scaled, mouse input should be scaled proportionally
@@ -206,7 +225,8 @@ static bool GuiSimpleButton(Rectangle bounds, const char *text, int fontSize, fl
     else
         *hoverAnim = fmaxf(*hoverAnim - hoverSpeed * dt, target);
 
-    float scale = 1.0f + 0.04f * (*hoverAnim);
+    // float scale = 1.0f + 0.04f * (*hoverAnim);
+    float scale = 1.0f;
     Rectangle drawRect = {
         bounds.x - (bounds.width * (scale - 1.0f)) / 2.0f,
         bounds.y - (bounds.height * (scale - 1.0f)) / 2.0f,
@@ -548,6 +568,57 @@ static void DrawHexBackground(void)
         DrawPolyLinesEx(hexes[i].pos, 6, size, hexes[i].rotation, HEX_LINE_THICK, hexColor);
     }
 }
+
+
+static void DrawHexGrid(void) {
+    DrawLine(0, 360, 720, 360, GRAY);
+    DrawLine(360, 0, 360, 720, GRAY);
+    int odd = GRID_TOP_PARITY;
+    int x, y;
+
+    y = - 300;
+    int n = GRID_HEIGHT-2;
+    for (int i = 0; i < n; i++) {
+        DrawHexGridRow(- 300 + (i%2)*GRID_TILE_SIZE*1.5 + 3 * GRID_TILE_SIZE * ((GRID_WIDTH / 2 - i) / 2), y, i + 1);
+        y += GRID_TILE_SIZE*0.866f;
+    }
+
+    for (int iy=0; iy < GRID_HEIGHT*2 + (-1 + GRID_BOTTOM_PARITY + GRID_TOP_PARITY); iy++) {
+
+        DrawHexGridRow(- 300 + odd*GRID_TILE_SIZE*1.5, y, GRID_WIDTH/2 + !odd * (GRID_WIDTH%2));
+
+        y += GRID_TILE_SIZE*0.866f;
+        odd = 1-odd;
+    }
+
+    n = GRID_HEIGHT-2;
+    for (int i = n-1; i >= 0; i--) {
+        DrawHexGridRow(- 300 + (i%2)*GRID_TILE_SIZE*1.5 + 3 * GRID_TILE_SIZE * ((GRID_WIDTH / 2 - i) / 2), y, i + 1);
+        y += GRID_TILE_SIZE*0.866f;
+    }
+/*
+    for (int y = -300; y < 300; y += GRID_TILE_SIZE*0.866f) { // 0.866 is the outer radius to inner radius factor
+        odd = 1-odd;
+        for (int x = -300 + odd*GRID_TILE_SIZE*1.5; x < 300; x += GRID_TILE_SIZE*3) {
+            DrawOneGridHex(x, y);
+        }
+    }
+*/
+}
+
+static void DrawHexGridRow(int x, int y, int len) {
+    for (int ix=0; ix < len; ix++) {
+        DrawOneGridHex(x, y);
+        x += GRID_TILE_SIZE*3;
+    }
+}
+
+static void DrawOneGridHex(int x, int y) {
+    DrawPoly((Vector2){x + 360, y + 360}, 6, GRID_TILE_SIZE+2, 0, (Color){123, 205, 116, 90});
+    DrawPolyLinesEx((Vector2){x + 360, y + 360}, 6, GRID_TILE_SIZE+2, 0, 4, (Color){56, 113, 51, 90});
+}
+
+
 // Update and draw frame
 void UpdateDrawFrame(void)
 {
@@ -580,7 +651,6 @@ void UpdateDrawFrame(void)
     UpdateSettingsPopup(dt);
     UpdateTransition(dt);
     //----------------------------------------------------------------------------------
-
     // Draw
     //----------------------------------------------------------------------------------
     // Render game screen to a texture,
@@ -600,6 +670,9 @@ void UpdateDrawFrame(void)
     case SCREEN_GAMEPLAY:
     {
         // TODO: Gameplay
+        BeginMode2D(camera);
+	    DrawHexGrid();
+        EndMode2D();
     }
     break;
 
@@ -613,7 +686,7 @@ void UpdateDrawFrame(void)
 
     DrawTransitionOverlay();
 
-    DrawRectangleLinesEx((Rectangle){0, 0, screenWidth, screenHeight}, 16, BLACK);
+    // DrawRectangleLinesEx((Rectangle){0, 0, screenWidth, screenHeight}, 16, BLACK);
 
     EndTextureMode();
 
