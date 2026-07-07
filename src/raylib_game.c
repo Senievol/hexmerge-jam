@@ -127,6 +127,7 @@ static void UpdateTransition(float dt);
 static void DrawTransitionOverlay(void);
 static void StartTransitionToGameplay(void);
 
+// Hex background
 static void SpawnHexAt(int index);
 static void InitHexBackground(void);
 static void UpdateHexBackground(float dt);
