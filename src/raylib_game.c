@@ -19,7 +19,8 @@
 #include <stdio.h>  // Required for: printf()
 #include <stdlib.h> // Required for:
 #include <string.h> // Required for:
-#include <math.h> // Required for: fminf(), fmaxf()
+#include <math.h>   // Required for: fminf(), fmaxf()
+#include <raymath.h> // Required for: Lerp(), Clamp
 
 //----------------------------------------------------------------------------------
 // Defines and Macros
@@ -32,6 +33,13 @@
 #else
 #define LOG(...)
 #endif
+
+#define HEX_MAX_COUNT       240
+#define HEX_TIER_COUNT      4
+#define HEX_LINE_THICK      4.0f
+#define HEX_SPAWN_MARGIN    40.0f
+#define HEX_SPAWN_MIN_TIME  0.4f
+#define HEX_SPAWN_MAX_TIME  1.0f
 
 //----------------------------------------------------------------------------------
 // Types and Structures Definition
@@ -51,6 +59,16 @@ typedef enum
     TRANSITION_OUT, // Fading to black
     TRANSITION_IN   // Fading from black
 } TransitionPhase;
+
+typedef struct Hex
+{
+    bool active;
+    Vector2 pos;
+    Vector2 vel;      // px/sec
+    float rotation;   // degrees
+    float rotSpeed;   // degrees/sec
+    int sizeTier;      // index into hexTierSizes
+} Hex;
 
 // TODO: Define your custom data types here
 
@@ -80,6 +98,10 @@ static float popupAnim = 0.0f;
 static TransitionPhase transitionPhase = TRANSITION_NONE;
 static float transitionTimer = 0.0f;
 static const float TRANSITION_DURATION = 0.35f; // seconds per half, out -> in
+
+static const float hexTierSizes[HEX_TIER_COUNT] = { 16.0f, 23.0f, 32.0f, 45.0f }; // tier 0..3
+static Hex hexes[HEX_MAX_COUNT];
+static float hexSpawnTimer = 0.0f;
 // TODO: Define global variables here, recommended to make them static
 
 //----------------------------------------------------------------------------------
@@ -88,8 +110,6 @@ static const float TRANSITION_DURATION = 0.35f; // seconds per half, out -> in
 static void UpdateDrawFrame(void); // Update and Draw one frame
 
 // Small math helpers
-static float FLerp(float a, float b, float t);
-static float FClamp(float value, float min, float max);
 static float EaseOutCubic(float t);
 
 static bool GuiSimpleButton(Rectangle bounds, const char *text, int fontSize, float *hoverAnim, bool interactive);
@@ -106,6 +126,13 @@ static void DrawSettingsPopup(void);
 static void UpdateTransition(float dt);
 static void DrawTransitionOverlay(void);
 static void StartTransitionToGameplay(void);
+
+static void SpawnHexAt(int index);
+static void InitHexBackground(void);
+static void UpdateHexBackground(float dt);
+static void DrawHexBackground(void);
+
+
 
 //------------------------------------------------------------------------------------
 // Program main entry point
@@ -126,6 +153,8 @@ int main(void)
     // NOTE: If screen is scaled, mouse input should be scaled proportionally
     target = LoadRenderTexture(screenWidth, screenHeight);
     SetTextureFilter(target.texture, TEXTURE_FILTER_BILINEAR);
+
+    InitHexBackground();
 
 #if defined(PLATFORM_WEB)
     emscripten_set_main_loop(UpdateDrawFrame, 60, 1);
@@ -155,20 +184,6 @@ int main(void)
 //--------------------------------------------------------------------------------------------
 // Module Functions Definition
 //--------------------------------------------------------------------------------------------
-
-static float FLerp(float a, float b, float t)
-{
-    return a + (b - a) * t;
-}
-
-static float FClamp(float value, float min, float max)
-{
-    if (value < min)
-        return min;
-    if (value > max)
-        return max;
-    return value;
-}
 
 static float EaseOutCubic(float t)
 {
@@ -208,9 +223,9 @@ static bool GuiSimpleButton(Rectangle bounds, const char *text, int fontSize, fl
     {
         // Color change Raywhite to Lightgray as hover goes up
         fillColor = (Color){
-            (unsigned char)FLerp((float)RAYWHITE.r, (float)LIGHTGRAY.r, *hoverAnim),
-            (unsigned char)FLerp((float)RAYWHITE.g, (float)LIGHTGRAY.g, *hoverAnim),
-            (unsigned char)FLerp((float)RAYWHITE.b, (float)LIGHTGRAY.b, *hoverAnim),
+            (unsigned char)Lerp((float)RAYWHITE.r, (float)LIGHTGRAY.r, *hoverAnim),
+            (unsigned char)Lerp((float)RAYWHITE.g, (float)LIGHTGRAY.g, *hoverAnim),
+            (unsigned char)Lerp((float)RAYWHITE.b, (float)LIGHTGRAY.b, *hoverAnim),
             255};
         borderColor = BLACK;
         textColor = BLACK;
@@ -261,12 +276,15 @@ static void UpdateTransition(float dt)
 
 static void DrawTransitionOverlay(void)
 {
-    if (transitionPhase == TRANSITION_NONE) return;
- 
+    if (transitionPhase == TRANSITION_NONE)
+        return;
+
     float alpha = 0.0f;
-    if (transitionPhase == TRANSITION_OUT) alpha = FClamp(transitionTimer/TRANSITION_DURATION, 0.0f, 1.0f);
-    else alpha = FClamp(1.0f - transitionTimer/TRANSITION_DURATION, 0.0f, 1.0f);
- 
+    if (transitionPhase == TRANSITION_OUT)
+        alpha = Clamp(transitionTimer / TRANSITION_DURATION, 0.0f, 1.0f);
+    else
+        alpha = Clamp(1.0f - transitionTimer / TRANSITION_DURATION, 0.0f, 1.0f);
+
     DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, alpha));
 }
 
@@ -275,7 +293,8 @@ static void UpdateTitleScreen(float dt)
     if (titleAnimTimer < TITLE_ANIM_DURATION)
     {
         titleAnimTimer += dt;
-        if (titleAnimTimer > TITLE_ANIM_DURATION) titleAnimTimer = TITLE_ANIM_DURATION;
+        if (titleAnimTimer > TITLE_ANIM_DURATION)
+            titleAnimTimer = TITLE_ANIM_DURATION;
     }
 }
 
@@ -284,88 +303,89 @@ static void DrawTitleScreen(void)
     // Title screen input is disabled while the settings popup is showing/animating
     // or while a screen transition is in progress.
     bool inputBlocked = (transitionPhase != TRANSITION_NONE) || settingsOpen || (popupAnim > 0.01f);
- 
-    // --- Animated, two-colored title -----------------------------------------------------
-    float progress = FClamp(titleAnimTimer / TITLE_ANIM_DURATION, 0.0f, 1.0f);
+
+    // --- Animated 2 color title
+    float progress = Clamp(titleAnimTimer / TITLE_ANIM_DURATION, 0.0f, 1.0f);
     float eased = EaseOutCubic(progress);
- 
+
     int baseFontSize = 90;
-    float scale = FLerp(0.7f, 1.0f, eased);
+    float scale = Lerp(0.7f, 1.0f, eased);
     float alpha = eased;
     int fontSize = (int)(baseFontSize * scale);
- 
+
     const char *partHex = "Hex";
     const char *partMerge = "merge";
- 
+
     int hexWidth = MeasureText(partHex, fontSize);
     int mergeWidth = MeasureText(partMerge, fontSize);
     int totalWidth = hexWidth + mergeWidth;
- 
+
     int titleX = (screenWidth - totalWidth) / 2;
     int titleY = 150;
- 
+
     DrawText(partHex, titleX, titleY, fontSize, Fade(MAROON, alpha));
     DrawText(partMerge, titleX + hexWidth, titleY, fontSize, Fade(BLACK, alpha));
- 
+
     // --- Menu buttons ---------------------------------------------------------------------
     const int buttonWidth = 300;
     const int buttonHeight = 70;
     const int buttonSpacing = 30;
     const int buttonX = (screenWidth - buttonWidth) / 2;
     const int firstButtonY = 340;
- 
-    Rectangle playButton     = { (float)buttonX, (float)firstButtonY, (float)buttonWidth, (float)buttonHeight };
-    Rectangle settingsButton = { (float)buttonX, (float)(firstButtonY + (buttonHeight + buttonSpacing)), (float)buttonWidth, (float)buttonHeight };
- 
+
+    Rectangle playButton = {(float)buttonX, (float)firstButtonY, (float)buttonWidth, (float)buttonHeight};
+    Rectangle settingsButton = {(float)buttonX, (float)(firstButtonY + (buttonHeight + buttonSpacing)), (float)buttonWidth, (float)buttonHeight};
+
     if (GuiSimpleButton(playButton, "Play", 32, &playButtonHover, !inputBlocked))
     {
         StartTransitionToGameplay();
     }
- 
+
     if (GuiSimpleButton(settingsButton, "Settings", 32, &settingsButtonHover, !inputBlocked))
     {
         settingsOpen = true;
     }
-
 }
- 
+
 static void UpdateSettingsPopup(float dt)
 {
     float target = settingsOpen ? 1.0f : 0.0f;
     const float popupSpeed = 5.0f;
-    if (popupAnim < target) popupAnim = fminf(popupAnim + popupSpeed*dt, target);
-    else popupAnim = fmaxf(popupAnim - popupSpeed*dt, target);
+    if (popupAnim < target)
+        popupAnim = fminf(popupAnim + popupSpeed * dt, target);
+    else
+        popupAnim = fmaxf(popupAnim - popupSpeed * dt, target);
 }
 
 static void DrawSettingsPopup(void)
 {
-    if (popupAnim <= 0.001f) return;
- 
+    if (popupAnim <= 0.001f)
+        return;
+
     float eased = EaseOutCubic(popupAnim);
- 
-    DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.4f*popupAnim));
- 
-    Rectangle basePopupRect = { screenWidth/2.0f - 200, screenHeight/2.0f - 150, 400, 300 };
- 
-    float scale = FLerp(0.85f, 1.0f, eased);
+
+    DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.4f * popupAnim));
+
+    Rectangle basePopupRect = {screenWidth / 2.0f - 200, screenHeight / 2.0f - 150, 400, 300};
+
+    float scale = Lerp(0.85f, 1.0f, eased);
     float w = basePopupRect.width * scale;
     float h = basePopupRect.height * scale;
     Rectangle popupRect = {
-        basePopupRect.x + (basePopupRect.width - w)/2.0f,
-        basePopupRect.y + (basePopupRect.height - h)/2.0f,
-        w, h
-    };
- 
+        basePopupRect.x + (basePopupRect.width - w) / 2.0f,
+        basePopupRect.y + (basePopupRect.height - h) / 2.0f,
+        w, h};
+
     DrawRectangleRec(popupRect, Fade(RAYWHITE, eased));
     DrawRectangleLinesEx(popupRect, 4, Fade(BLACK, eased));
- 
+
     const char *popupTitle = "Settings";
     int popupTitleSize = 36;
     int popupTitleWidth = MeasureText(popupTitle, popupTitleSize);
     DrawText(popupTitle, (int)(popupRect.x + (popupRect.width - popupTitleWidth) / 2.0f),
              (int)(popupRect.y + 20), popupTitleSize, Fade(BLACK, eased));
- 
-    Rectangle closeButton = { popupRect.x + popupRect.width/2 - 100, popupRect.y + popupRect.height - 80, 200, 50 };
+
+    Rectangle closeButton = {popupRect.x + popupRect.width / 2 - 100, popupRect.y + popupRect.height - 80, 200, 50};
     bool closeInteractive = (popupAnim > 0.95f);
     if (GuiSimpleButton(closeButton, "Close", 28, &settingsCloseHover, closeInteractive))
     {
@@ -373,7 +393,160 @@ static void DrawSettingsPopup(void)
     }
 }
 
+static void SpawnHexAt(int index)
+{
+    int edge = GetRandomValue(0, 3); // 0=left,1=right,2=top,3=bottom
+    Vector2 pos, dir;
 
+    switch (edge)
+    {
+    case 0: // left
+        pos = (Vector2){ -HEX_SPAWN_MARGIN, (float)GetRandomValue(0, screenHeight) };
+        dir = (Vector2){ 1.0f, (float)GetRandomValue(-40, 40) / 100.0f };
+        break;
+    case 1: // right
+        pos = (Vector2){ screenWidth + HEX_SPAWN_MARGIN, (float)GetRandomValue(0, screenHeight) };
+        dir = (Vector2){ -1.0f, (float)GetRandomValue(-40, 40) / 100.0f };
+        break;
+    case 2: // top
+        pos = (Vector2){ (float)GetRandomValue(0, screenWidth), -HEX_SPAWN_MARGIN };
+        dir = (Vector2){ (float)GetRandomValue(-40, 40) / 100.0f, 1.0f };
+        break;
+    default: // bottom
+        pos = (Vector2){ (float)GetRandomValue(0, screenWidth), screenHeight + HEX_SPAWN_MARGIN };
+        dir = (Vector2){ (float)GetRandomValue(-40, 40) / 100.0f, -1.0f };
+        break;
+    }
+
+    float speed = (float)GetRandomValue(15, 35);
+    hexes[index].active = true;
+    hexes[index].pos = pos;
+    hexes[index].vel = Vector2Scale(Vector2Normalize(dir), speed);
+    hexes[index].rotation = (float)GetRandomValue(0, 359);
+    hexes[index].rotSpeed = (float)GetRandomValue(-30, 30);
+    hexes[index].sizeTier = 0;
+}
+
+static void InitHexBackground(void)
+{
+    for (int i = 0; i < HEX_MAX_COUNT; i++)
+        hexes[i].active = false;
+
+    int startCount = HEX_MAX_COUNT / 3;
+    for (int i = 0; i < startCount; i++)
+    {
+        hexes[i].active = true;
+        hexes[i].pos = (Vector2){ (float)GetRandomValue(0, screenWidth), (float)GetRandomValue(0, screenHeight) };
+        float angle = (float)GetRandomValue(0, 359) * DEG2RAD;
+        float speed = (float)GetRandomValue(15, 35);
+        hexes[i].vel = (Vector2){ cosf(angle) * speed, sinf(angle) * speed };
+        hexes[i].rotation = (float)GetRandomValue(0, 359);
+        hexes[i].rotSpeed = (float)GetRandomValue(-30, 30);
+        hexes[i].sizeTier = 0;
+    }
+
+    hexSpawnTimer = HEX_SPAWN_MIN_TIME;
+}
+
+static void UpdateHexBackground(float dt)
+{
+    // Move / rotate / despawn off-screen hexes
+    for (int i = 0; i < HEX_MAX_COUNT; i++)
+    {
+        if (!hexes[i].active) continue;
+
+        hexes[i].pos.x += hexes[i].vel.x * dt;
+        hexes[i].pos.y += hexes[i].vel.y * dt;
+        hexes[i].rotation += hexes[i].rotSpeed * dt;
+
+        float size = hexTierSizes[hexes[i].sizeTier];
+        float m = size + HEX_SPAWN_MARGIN;
+        if (hexes[i].pos.x < -m || hexes[i].pos.x > screenWidth + m ||
+            hexes[i].pos.y < -m || hexes[i].pos.y > screenHeight + m)
+        {
+            hexes[i].active = false;
+        }
+    }
+
+    // Pairwise merge/bounce check
+    for (int i = 0; i < HEX_MAX_COUNT; i++)
+    {
+        if (!hexes[i].active) continue;
+        for (int j = i + 1; j < HEX_MAX_COUNT; j++)
+        {
+            if (!hexes[j].active) continue;
+
+            float sizeI = hexTierSizes[hexes[i].sizeTier];
+            float sizeJ = hexTierSizes[hexes[j].sizeTier];
+            float dist = Vector2Distance(hexes[i].pos, hexes[j].pos);
+            float overlapThreshold = (sizeI + sizeJ) * 0.87f;
+
+            if (dist < overlapThreshold)
+            {
+                bool sameTier = (hexes[i].sizeTier == hexes[j].sizeTier);
+                bool canGrow = (hexes[i].sizeTier < HEX_TIER_COUNT - 1);
+
+                if (sameTier && canGrow)
+                {
+                    // Merge: promote to next tier
+                    hexes[i].pos = Vector2Lerp(hexes[i].pos, hexes[j].pos, 0.5f);
+                    hexes[i].vel = Vector2Scale(Vector2Add(hexes[i].vel, hexes[j].vel), 0.5f);
+                    hexes[i].rotSpeed = (hexes[i].rotSpeed + hexes[j].rotSpeed) * 0.5f;
+                    hexes[i].sizeTier++;
+
+                    hexes[j].active = false;
+                }
+                else
+                {
+                    // Different tiers, or already at max tier -> bounce (equal-mass elastic collision)
+                    Vector2 normal = (dist > 0.0001f)
+                        ? Vector2Scale(Vector2Subtract(hexes[j].pos, hexes[i].pos), 1.0f / dist)
+                        : (Vector2){ 1.0f, 0.0f };
+
+                    float v1n = Vector2DotProduct(hexes[i].vel, normal);
+                    float v2n = Vector2DotProduct(hexes[j].vel, normal);
+
+                    Vector2 tangentI = Vector2Subtract(hexes[i].vel, Vector2Scale(normal, v1n));
+                    Vector2 tangentJ = Vector2Subtract(hexes[j].vel, Vector2Scale(normal, v2n));
+
+                    hexes[i].vel = Vector2Add(tangentI, Vector2Scale(normal, v2n));
+                    hexes[j].vel = Vector2Add(tangentJ, Vector2Scale(normal, v1n));
+
+                    float pushAmount = (overlapThreshold - dist) * 0.5f + 0.5f;
+                    hexes[i].pos = Vector2Subtract(hexes[i].pos, Vector2Scale(normal, pushAmount));
+                    hexes[j].pos = Vector2Add(hexes[j].pos, Vector2Scale(normal, pushAmount));
+                }
+            }
+        }
+    }
+
+    // Spawn new hexes over time
+    hexSpawnTimer -= dt;
+    if (hexSpawnTimer <= 0.0f)
+    {
+        for (int i = 0; i < HEX_MAX_COUNT; i++)
+        {
+            if (!hexes[i].active)
+            {
+                SpawnHexAt(i);
+                break;
+            }
+        }
+        hexSpawnTimer = (float)GetRandomValue((int)(HEX_SPAWN_MIN_TIME * 100), (int)(HEX_SPAWN_MAX_TIME * 100)) / 100.0f;
+    }
+}
+
+static void DrawHexBackground(void)
+{
+    Color hexColor = Fade(BLACK, 0.08f);
+
+    for (int i = 0; i < HEX_MAX_COUNT; i++)
+    {
+        if (!hexes[i].active) continue;
+        float size = hexTierSizes[hexes[i].sizeTier];
+        DrawPolyLinesEx(hexes[i].pos, 6, size, hexes[i].rotation, HEX_LINE_THICK, hexColor);
+    }
+}
 // Update and draw frame
 void UpdateDrawFrame(void)
 {
@@ -384,23 +557,27 @@ void UpdateDrawFrame(void)
 
     switch (currentScreen)
     {
-        case SCREEN_TITLE:
-        {
-            UpdateTitleScreen(dt);
-        } break;
+    case SCREEN_TITLE:
+    {
+        UpdateTitleScreen(dt);
+    }
+    break;
 
-        case SCREEN_GAMEPLAY:
-        {
-            // TODO: Gameplay 
-        } break;
-        
-        case SCREEN_LOGO:
-        case SCREEN_ENDING:
-        default: break;
+    case SCREEN_GAMEPLAY:
+    {
+        // TODO: Gameplay
+    }
+    break;
+
+    case SCREEN_LOGO:
+    case SCREEN_ENDING:
+    default:
+        break;
     }
 
     UpdateSettingsPopup(dt);
     UpdateTransition(dt);
+    UpdateHexBackground(dt);
     //----------------------------------------------------------------------------------
 
     // Draw
@@ -410,21 +587,26 @@ void UpdateDrawFrame(void)
     BeginTextureMode(target);
     ClearBackground(RAYWHITE);
 
+    DrawHexBackground();
+
     switch (currentScreen)
     {
-        case SCREEN_TITLE:
-        {
-            DrawTitleScreen();
-        } break;
+    case SCREEN_TITLE:
+    {
+        DrawTitleScreen();
+    }
+    break;
 
-        case SCREEN_GAMEPLAY:
-        {
-            // TODO: Gameplay 
-        } break;
-        
-        case SCREEN_LOGO:
-        case SCREEN_ENDING:
-        default: break;
+    case SCREEN_GAMEPLAY:
+    {
+        // TODO: Gameplay
+    }
+    break;
+
+    case SCREEN_LOGO:
+    case SCREEN_ENDING:
+    default:
+        break;
     }
 
     DrawSettingsPopup();
