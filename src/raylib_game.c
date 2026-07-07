@@ -304,7 +304,7 @@ static void DrawTitleScreen(void)
     // or while a screen transition is in progress.
     bool inputBlocked = (transitionPhase != TRANSITION_NONE) || settingsOpen || (popupAnim > 0.01f);
 
-    // --- Animated 2 color title
+    // Animated 2 color title
     float progress = Clamp(titleAnimTimer / TITLE_ANIM_DURATION, 0.0f, 1.0f);
     float eased = EaseOutCubic(progress);
 
@@ -326,7 +326,7 @@ static void DrawTitleScreen(void)
     DrawText(partHex, titleX, titleY, fontSize, Fade(MAROON, alpha));
     DrawText(partMerge, titleX + hexWidth, titleY, fontSize, Fade(BLACK, alpha));
 
-    // --- Menu buttons ---------------------------------------------------------------------
+    // Menu buttons
     const int buttonWidth = 300;
     const int buttonHeight = 70;
     const int buttonSpacing = 30;
@@ -395,7 +395,7 @@ static void DrawSettingsPopup(void)
 
 static void SpawnHexAt(int index)
 {
-    int edge = GetRandomValue(0, 3); // 0=left,1=right,2=top,3=bottom
+    int edge = GetRandomValue(0, 3);
     Vector2 pos, dir;
 
     switch (edge)
@@ -468,7 +468,7 @@ static void UpdateHexBackground(float dt)
         }
     }
 
-    // Pairwise merge/bounce check
+    // Merge or bounce checker
     for (int i = 0; i < HEX_MAX_COUNT; i++)
     {
         if (!hexes[i].active) continue;
@@ -488,7 +488,7 @@ static void UpdateHexBackground(float dt)
 
                 if (sameTier && canGrow)
                 {
-                    // Merge: promote to next tier
+                    // Merge (ie. promote to upper tier)
                     hexes[i].pos = Vector2Lerp(hexes[i].pos, hexes[j].pos, 0.5f);
                     hexes[i].vel = Vector2Scale(Vector2Add(hexes[i].vel, hexes[j].vel), 0.5f);
                     hexes[i].rotSpeed = (hexes[i].rotSpeed + hexes[j].rotSpeed) * 0.5f;
@@ -498,7 +498,7 @@ static void UpdateHexBackground(float dt)
                 }
                 else
                 {
-                    // Different tiers, or already at max tier -> bounce (equal-mass elastic collision)
+                    // Not the same tier colliding or max tier colliding with any other -> bounce
                     Vector2 normal = (dist > 0.0001f)
                         ? Vector2Scale(Vector2Subtract(hexes[j].pos, hexes[i].pos), 1.0f / dist)
                         : (Vector2){ 1.0f, 0.0f };
@@ -560,6 +560,7 @@ void UpdateDrawFrame(void)
     case SCREEN_TITLE:
     {
         UpdateTitleScreen(dt);
+        UpdateHexBackground(dt);
     }
     break;
 
@@ -577,7 +578,6 @@ void UpdateDrawFrame(void)
 
     UpdateSettingsPopup(dt);
     UpdateTransition(dt);
-    UpdateHexBackground(dt);
     //----------------------------------------------------------------------------------
 
     // Draw
@@ -587,13 +587,12 @@ void UpdateDrawFrame(void)
     BeginTextureMode(target);
     ClearBackground(RAYWHITE);
 
-    DrawHexBackground();
-
     switch (currentScreen)
     {
     case SCREEN_TITLE:
     {
         DrawTitleScreen();
+        DrawHexBackground();
     }
     break;
 
