@@ -44,6 +44,9 @@
 #define HEX_GRID_RADIUS 4
 #define TILE_SIZE 40.0f
 
+#define NULL_TILE (Vector2){99, 99}
+#define IS_NULL_TILE(tile) (tile.x == NULL_TILE.x && tile.y == NULL_TILE.y)
+
 #define RGB(r, g, b) (Color){r, g, b, 255}
 #define MAX(a, b) (a > b ? a : b)
 #define MIN(a, b) (a < b ? a : b)
@@ -76,6 +79,12 @@ typedef struct Hex
     float rotSpeed; // degrees/sec
     int sizeTier;   // index into hexTierSizes
 } Hex;
+
+typedef struct Tower {
+    int x;
+    int y;
+    int type;
+} Tower;
 
 // TODO: Define your custom data types here
 
@@ -112,11 +121,13 @@ static float hexSpawnTimer = 0.0f;
 
 
 // Game Interface
-static Vector2 canvasOrigin = {screenWidth / 2.0f, (screenHeight / 2.0f) - 60.0f };
+static Vector2 canvasOrigin = {screenWidth / 2.0f, (screenHeight / 2.0f) - 60.0f};
+static int draggedTowerId = 0;
 
-// Temp
-static int tower_a = 0;
-static int tower_b = 0;
+// Game objects
+static Tower towers[256];
+static int towerCount = 0;
+
 
 
 // TODO: Define global variables here, recommended to make them static
@@ -157,7 +168,7 @@ static void DrawInventory(void);
 
 // Gameplay
 static void DrawTower(int a, int b, int type);
-static Vector2 DraggableTower(int x, int y, int type);
+static Vector2 DraggableTower(int x, int y, int type, int id);
 //------------------------------------------------------------------------------------
 // Program main entry point
 //------------------------------------------------------------------------------------
@@ -649,20 +660,61 @@ static void DrawHexGrid(void)
             DrawPolyLinesEx(center, 6, TILE_SIZE + 2, 30.0f, HEX_LINE_THICK, RGB(157, 237, 181));
         }
     }
+
+    Tower tower;
+    for (int i = 0; i < towerCount; i++) {
+        tower = towers[i];
+        DrawTower(tower.x, tower.y, tower.type);
+    }
 }
 
 static void DrawTower(int a, int b, int type) {
     Vector2 pos = HexToPix(a, b, TILE_SIZE, canvasOrigin);
     DrawPoly(pos, 6, TILE_SIZE + 2, 30.0f, Fade(RGB(157, 237, 181), 0.45f));
-    DrawPolyLinesEx(pos, 3, TILE_SIZE * 0.7f, 30.0f, 4, BLUE);
+
+    Color color = RGB(251, 84, 43);
+    switch (type) {
+        case 1: color = RGB(91, 41, 126); break;
+        case 2: color = RGB(41, 72, 126); break;
+        case 3: color = RGB(38, 109, 49); break;
+        case 4: color = RGB(196, 108, 16); break;
+        default: break;
+    }
+    DrawPoly(pos, 3, TILE_SIZE * 0.7f, 30.0f, color);
 }
 
-static Vector2 DraggableTower(int x, int y, int type) {
-    DrawPoly((Vector2){x, y}, 3, 48.0f, 30.0f, RGB(251, 84, 43));
+static Vector2 DraggableTower(int x, int y, int type, int id) {
+    Rectangle hitbox = {x - 50, y - 50, 100, 80};
+    DrawRectangleRec(hitbox, Fade(BLACK, 0.1f)); // show hitbox to debug
+
+    Color color = RGB(251, 84, 43);
+    switch (type) {
+        case 1: color = RGB(91, 41, 126); break;
+        case 2: color = RGB(41, 72, 126); break;
+        case 3: color = RGB(38, 109, 49); break;
+        case 4: color = RGB(196, 108, 16); break;
+        default: break;
+    }
+
+    DrawPoly((Vector2){x, y}, 3, 48.0f, 30.0f, color);
 
     // detect mouse in bounds, drag, and return the position on the grid when the mouse is released
 
-    return (Vector2){0, 0};
+    if (draggedTowerId == id) {
+        Vector2 mouse = GetMousePosition();
+        Vector2 pos = PixToHex(mouse.x, mouse.y, TILE_SIZE, canvasOrigin);
+        if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+            draggedTowerId = 0;
+            if (mouse.y < screenHeight - 120) // when released above the inventory, return position (tower placed)
+                return pos;
+        } else {
+            DrawTower(pos.x, pos.y, type);
+        }
+    } else if (CheckCollisionPointRec(GetMousePosition(), hitbox) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        draggedTowerId = id;
+    }
+
+    return NULL_TILE;
 }
 
 static void DrawInventory(void) {
@@ -671,11 +723,15 @@ static void DrawInventory(void) {
     DrawRectangleLinesEx(inventoryRect, 6, DARKGRAY);
 
     float itemsY = inventoryRect.y + inventoryRect.height / 2 + 10;
-    DraggableTower(96, itemsY, 0);
-    DraggableTower(228, itemsY, 1);
-    DraggableTower(360, itemsY, 2);
-    DraggableTower(492, itemsY, 3);
-    DraggableTower(624, itemsY, 4);
+    Vector2 tile;
+    for (int i = 0; i < 5; i++) {
+        int type = i;
+        int id = i + 1;
+        tile = DraggableTower(96 + 132*i, itemsY, type, id);
+        if (!IS_NULL_TILE(tile)) {
+            towers[towerCount++] = (Tower){tile.x, tile.y, type};
+        }
+    }
 }
 
 // Update and draw frame
@@ -699,11 +755,6 @@ void UpdateDrawFrame(void)
     {
         // TODO: Gameplay
 
-        // debug
-        Vector2 mouse = GetMousePosition();
-        Vector2 pos = PixToHex(mouse.x, mouse.y, TILE_SIZE, canvasOrigin);
-        tower_a = pos.x;
-        tower_b = pos.y;
     }
     break;
 
@@ -736,7 +787,6 @@ void UpdateDrawFrame(void)
     {
         // TODO: Gameplay
         DrawHexGrid();
-        DrawTower(tower_a, tower_b, 0);
 
         // UI
         DrawInventory();
