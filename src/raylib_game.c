@@ -16,10 +16,10 @@
 #include <emscripten/emscripten.h> // Emscripten library
 #endif
 
-#include <stdio.h>  // Required for: printf()
-#include <stdlib.h> // Required for:
-#include <string.h> // Required for:
-#include <math.h>   // Required for: fminf(), fmaxf()
+#include <stdio.h>   // Required for: printf()
+#include <stdlib.h>  // Required for:
+#include <string.h>  // Required for:
+#include <math.h>    // Required for: fminf(), fmaxf()
 #include <raymath.h> // Required for: Lerp(), Clamp()
 
 //----------------------------------------------------------------------------------
@@ -34,18 +34,15 @@
 #define LOG(...)
 #endif
 
-#define HEX_MAX_COUNT       240
-#define HEX_TIER_COUNT      4
-#define HEX_LINE_THICK      4.0f
-#define HEX_SPAWN_MARGIN    40.0f
-#define HEX_SPAWN_MIN_TIME  0.4f
-#define HEX_SPAWN_MAX_TIME  1.0f
+#define HEX_MAX_COUNT 240
+#define HEX_TIER_COUNT 4
+#define HEX_LINE_THICK 4.0f
+#define HEX_SPAWN_MARGIN 40.0f
+#define HEX_SPAWN_MIN_TIME 0.4f
+#define HEX_SPAWN_MAX_TIME 1.0f
 
-#define GRID_TILE_SIZE      26
-#define GRID_HEIGHT         5
-#define GRID_WIDTH          9
-#define GRID_TOP_PARITY     1
-#define GRID_BOTTOM_PARITY  1
+#define HEX_GRID_RADIUS 4
+#define HEX_SIZE 40.0f
 
 //----------------------------------------------------------------------------------
 // Types and Structures Definition
@@ -70,10 +67,10 @@ typedef struct Hex
 {
     bool active;
     Vector2 pos;
-    Vector2 vel;      // px/sec
-    float rotation;   // degrees
-    float rotSpeed;   // degrees/sec
-    int sizeTier;      // index into hexTierSizes
+    Vector2 vel;    // px/sec
+    float rotation; // degrees
+    float rotSpeed; // degrees/sec
+    int sizeTier;   // index into hexTierSizes
 } Hex;
 
 // TODO: Define your custom data types here
@@ -105,11 +102,9 @@ static TransitionPhase transitionPhase = TRANSITION_NONE;
 static float transitionTimer = 0.0f;
 static const float TRANSITION_DURATION = 0.35f; // seconds per half, out -> in
 
-static const float hexTierSizes[HEX_TIER_COUNT] = { 16.0f, 23.0f, 32.0f, 45.0f }; // tier 0..3
+static const float hexTierSizes[HEX_TIER_COUNT] = {16.0f, 23.0f, 32.0f, 45.0f}; // tier 0..3
 static Hex hexes[HEX_MAX_COUNT];
 static float hexSpawnTimer = 0.0f;
-
-Camera2D camera;
 
 // TODO: Define global variables here, recommended to make them static
 
@@ -121,7 +116,6 @@ static void UpdateDrawFrame(void); // Update and Draw one frame
 // Small math helpers
 static float EaseOutCubic(float t);
 static bool GuiSimpleButton(Rectangle bounds, const char *text, int fontSize, float *hoverAnim, bool interactive);
-
 
 // Title screen
 static void UpdateTitleScreen(float dt);
@@ -142,12 +136,9 @@ static void InitHexBackground(void);
 static void UpdateHexBackground(float dt);
 static void DrawHexBackground(void);
 
-
 // Game screen
+static Vector2 HexToPixel(int a, int b, float size, Vector2 origin);
 static void DrawHexGrid(void);
-static void DrawOneGridHex(int x, int y);
-static void DrawHexGridRow(int x, int y, int len);
-
 
 //------------------------------------------------------------------------------------
 // Program main entry point
@@ -163,11 +154,6 @@ int main(void)
     InitWindow(screenWidth, screenHeight, "Hexmerge");
 
     // TODO: Load resources / Initialize variables at this point
-    camera = (Camera2D){ 0 };
-    camera.target = (Vector2){ screenWidth/2.0f, screenHeight/2.0f };
-    camera.offset = (Vector2){ screenWidth/2.0f, screenHeight/2.0f };
-    camera.rotation = 0.0f;
-    camera.zoom = 1.0f;
 
     // Render texture to draw, enables screen scaling
     // NOTE: If screen is scaled, mouse input should be scaled proportionally
@@ -422,20 +408,20 @@ static void SpawnHexAt(int index)
     switch (edge)
     {
     case 0: // left
-        pos = (Vector2){ -HEX_SPAWN_MARGIN, (float)GetRandomValue(0, screenHeight) };
-        dir = (Vector2){ 1.0f, (float)GetRandomValue(-40, 40) / 100.0f };
+        pos = (Vector2){-HEX_SPAWN_MARGIN, (float)GetRandomValue(0, screenHeight)};
+        dir = (Vector2){1.0f, (float)GetRandomValue(-40, 40) / 100.0f};
         break;
     case 1: // right
-        pos = (Vector2){ screenWidth + HEX_SPAWN_MARGIN, (float)GetRandomValue(0, screenHeight) };
-        dir = (Vector2){ -1.0f, (float)GetRandomValue(-40, 40) / 100.0f };
+        pos = (Vector2){screenWidth + HEX_SPAWN_MARGIN, (float)GetRandomValue(0, screenHeight)};
+        dir = (Vector2){-1.0f, (float)GetRandomValue(-40, 40) / 100.0f};
         break;
     case 2: // top
-        pos = (Vector2){ (float)GetRandomValue(0, screenWidth), -HEX_SPAWN_MARGIN };
-        dir = (Vector2){ (float)GetRandomValue(-40, 40) / 100.0f, 1.0f };
+        pos = (Vector2){(float)GetRandomValue(0, screenWidth), -HEX_SPAWN_MARGIN};
+        dir = (Vector2){(float)GetRandomValue(-40, 40) / 100.0f, 1.0f};
         break;
     default: // bottom
-        pos = (Vector2){ (float)GetRandomValue(0, screenWidth), screenHeight + HEX_SPAWN_MARGIN };
-        dir = (Vector2){ (float)GetRandomValue(-40, 40) / 100.0f, -1.0f };
+        pos = (Vector2){(float)GetRandomValue(0, screenWidth), screenHeight + HEX_SPAWN_MARGIN};
+        dir = (Vector2){(float)GetRandomValue(-40, 40) / 100.0f, -1.0f};
         break;
     }
 
@@ -457,10 +443,10 @@ static void InitHexBackground(void)
     for (int i = 0; i < startCount; i++)
     {
         hexes[i].active = true;
-        hexes[i].pos = (Vector2){ (float)GetRandomValue(0, screenWidth), (float)GetRandomValue(0, screenHeight) };
+        hexes[i].pos = (Vector2){(float)GetRandomValue(0, screenWidth), (float)GetRandomValue(0, screenHeight)};
         float angle = (float)GetRandomValue(0, 359) * DEG2RAD;
         float speed = (float)GetRandomValue(15, 35);
-        hexes[i].vel = (Vector2){ cosf(angle) * speed, sinf(angle) * speed };
+        hexes[i].vel = (Vector2){cosf(angle) * speed, sinf(angle) * speed};
         hexes[i].rotation = (float)GetRandomValue(0, 359);
         hexes[i].rotSpeed = (float)GetRandomValue(-30, 30);
         hexes[i].sizeTier = 0;
@@ -474,7 +460,8 @@ static void UpdateHexBackground(float dt)
     // Move / rotate / despawn off-screen hexes
     for (int i = 0; i < HEX_MAX_COUNT; i++)
     {
-        if (!hexes[i].active) continue;
+        if (!hexes[i].active)
+            continue;
 
         hexes[i].pos.x += hexes[i].vel.x * dt;
         hexes[i].pos.y += hexes[i].vel.y * dt;
@@ -492,10 +479,12 @@ static void UpdateHexBackground(float dt)
     // Merge or bounce checker
     for (int i = 0; i < HEX_MAX_COUNT; i++)
     {
-        if (!hexes[i].active) continue;
+        if (!hexes[i].active)
+            continue;
         for (int j = i + 1; j < HEX_MAX_COUNT; j++)
         {
-            if (!hexes[j].active) continue;
+            if (!hexes[j].active)
+                continue;
 
             float sizeI = hexTierSizes[hexes[i].sizeTier];
             float sizeJ = hexTierSizes[hexes[j].sizeTier];
@@ -521,8 +510,8 @@ static void UpdateHexBackground(float dt)
                 {
                     // Not the same tier colliding or max tier colliding with any other -> bounce
                     Vector2 normal = (dist > 0.0001f)
-                        ? Vector2Scale(Vector2Subtract(hexes[j].pos, hexes[i].pos), 1.0f / dist)
-                        : (Vector2){ 1.0f, 0.0f };
+                                         ? Vector2Scale(Vector2Subtract(hexes[j].pos, hexes[i].pos), 1.0f / dist)
+                                         : (Vector2){1.0f, 0.0f};
 
                     float v1n = Vector2DotProduct(hexes[i].vel, normal);
                     float v2n = Vector2DotProduct(hexes[j].vel, normal);
@@ -563,61 +552,49 @@ static void DrawHexBackground(void)
 
     for (int i = 0; i < HEX_MAX_COUNT; i++)
     {
-        if (!hexes[i].active) continue;
+        if (!hexes[i].active)
+            continue;
         float size = hexTierSizes[hexes[i].sizeTier];
         DrawPolyLinesEx(hexes[i].pos, 6, size, hexes[i].rotation, HEX_LINE_THICK, hexColor);
     }
 }
 
+static Vector2 HexToPixel(int a, int b, float size, Vector2 origin)
+{
+    float x = size * 1.5f * (float)a;
+    float y = size * sqrtf(3.0f) * ((float)b + (float)a / 2.0f);
 
-static void DrawHexGrid(void) {
-    DrawLine(0, 360, 720, 360, GRAY);
-    DrawLine(360, 0, 360, 720, GRAY);
-    int odd = GRID_TOP_PARITY;
-    int x, y;
+    Vector2 rotated = Vector2Rotate((Vector2){x, y}, 30.0f * DEG2RAD);
 
-    y = - 300;
-    int n = GRID_HEIGHT-2;
-    for (int i = 0; i < n; i++) {
-        DrawHexGridRow(- 300 + (i%2)*GRID_TILE_SIZE*1.5 + 3 * GRID_TILE_SIZE * ((GRID_WIDTH / 2 - i) / 2), y, i + 1);
-        y += GRID_TILE_SIZE*0.866f;
-    }
+    return (Vector2){origin.x + rotated.x, origin.y + rotated.y};
+}
 
-    for (int iy=0; iy < GRID_HEIGHT*2 + (-1 + GRID_BOTTOM_PARITY + GRID_TOP_PARITY); iy++) {
+static void DrawHexGrid(void)
+{
+    Vector2 origin = {screenWidth / 2.0f, (screenHeight / 2.0f) - 75.0f };
 
-        DrawHexGridRow(- 300 + odd*GRID_TILE_SIZE*1.5, y, GRID_WIDTH/2 + !odd * (GRID_WIDTH%2));
+    for (int a = -HEX_GRID_RADIUS; a <= HEX_GRID_RADIUS; a++)
+    {
+        int bMin = -HEX_GRID_RADIUS;
+        if (-a - HEX_GRID_RADIUS > bMin)
+        {
+            bMin = -a - HEX_GRID_RADIUS;
+        }
 
-        y += GRID_TILE_SIZE*0.866f;
-        odd = 1-odd;
-    }
+        int bMax = HEX_GRID_RADIUS;
+        if (-a + HEX_GRID_RADIUS < bMax)
+        {
+            bMax = -a + HEX_GRID_RADIUS;
+        }
 
-    n = GRID_HEIGHT-2;
-    for (int i = n-1; i >= 0; i--) {
-        DrawHexGridRow(- 300 + (i%2)*GRID_TILE_SIZE*1.5 + 3 * GRID_TILE_SIZE * ((GRID_WIDTH / 2 - i) / 2), y, i + 1);
-        y += GRID_TILE_SIZE*0.866f;
-    }
-/*
-    for (int y = -300; y < 300; y += GRID_TILE_SIZE*0.866f) { // 0.866 is the outer radius to inner radius factor
-        odd = 1-odd;
-        for (int x = -300 + odd*GRID_TILE_SIZE*1.5; x < 300; x += GRID_TILE_SIZE*3) {
-            DrawOneGridHex(x, y);
+        for (int b = bMin; b <= bMax; b++)
+        {
+            Vector2 center = HexToPixel(a, b, HEX_SIZE - 2, origin);
+
+            DrawPolyLinesEx(center, 6, HEX_SIZE, 30.0f, HEX_LINE_THICK, Fade(LIME, 0.08f));
         }
     }
-*/
 }
-
-static void DrawHexGridRow(int x, int y, int len) {
-    for (int ix=0; ix < len; ix++) {
-        DrawOneGridHex(x, y);
-        x += GRID_TILE_SIZE*3;
-    }
-}
-
-static void DrawOneGridHex(int x, int y) {
-    DrawPoly((Vector2){x + 360, y + 360}, 6, GRID_TILE_SIZE+2, 0, (Color){123, 205, 116, 90});
-    DrawPolyLinesEx((Vector2){x + 360, y + 360}, 6, GRID_TILE_SIZE+2, 0, 4, (Color){56, 113, 51, 90});
-}
-
 
 // Update and draw frame
 void UpdateDrawFrame(void)
@@ -670,9 +647,7 @@ void UpdateDrawFrame(void)
     case SCREEN_GAMEPLAY:
     {
         // TODO: Gameplay
-        BeginMode2D(camera);
-	    DrawHexGrid();
-        EndMode2D();
+        DrawHexGrid();
     }
     break;
 
