@@ -111,8 +111,7 @@ static Hex hexes[HEX_MAX_COUNT];
 static float hexSpawnTimer = 0.0f;
 
 
-// Game UI
-static Rectangle inventoryRect = {0, screenHeight - 120, screenWidth, 120};
+// Game Interface
 static Vector2 canvasOrigin = {screenWidth / 2.0f, (screenHeight / 2.0f) - 60.0f };
 
 // Temp
@@ -154,10 +153,11 @@ static void DrawHexBackground(void);
 static Vector2 HexToPix(int a, int b, float size, Vector2 origin);
 static Vector2 PixToHex(int x, int y, float size, Vector2 origin);
 static void DrawHexGrid(void);
+static void DrawInventory(void);
 
 // Gameplay
 static void DrawTower(int a, int b, int type);
-
+static Vector2 DraggableTower(int x, int y, int type);
 //------------------------------------------------------------------------------------
 // Program main entry point
 //------------------------------------------------------------------------------------
@@ -657,6 +657,27 @@ static void DrawTower(int a, int b, int type) {
     DrawPolyLinesEx(pos, 3, TILE_SIZE * 0.7f, 30.0f, 4, BLUE);
 }
 
+static Vector2 DraggableTower(int x, int y, int type) {
+    DrawPoly((Vector2){x, y}, 3, 48.0f, 30.0f, RGB(251, 84, 43));
+
+    // detect mouse in bounds, drag, and return the position on the grid when the mouse is released
+
+    return (Vector2){0, 0};
+}
+
+static void DrawInventory(void) {
+    Rectangle inventoryRect = {0, screenHeight - 120, screenWidth, 120};
+    DrawRectangleRec(inventoryRect, RGB(138, 159, 179));
+    DrawRectangleLinesEx(inventoryRect, 6, DARKGRAY);
+
+    float itemsY = inventoryRect.y + inventoryRect.height / 2 + 10;
+    DraggableTower(96, itemsY, 0);
+    DraggableTower(228, itemsY, 1);
+    DraggableTower(360, itemsY, 2);
+    DraggableTower(492, itemsY, 3);
+    DraggableTower(624, itemsY, 4);
+}
+
 // Update and draw frame
 void UpdateDrawFrame(void)
 {
@@ -677,10 +698,12 @@ void UpdateDrawFrame(void)
     case SCREEN_GAMEPLAY:
     {
         // TODO: Gameplay
-        if(IsKeyDown(KEY_SPACE)) {
-            tower_a = PixToHex(GetMousePosition().x, GetMousePosition().y, TILE_SIZE, canvasOrigin).x;
-            tower_b = PixToHex(GetMousePosition().x, GetMousePosition().y, TILE_SIZE, canvasOrigin).y;
-        }
+
+        // debug
+        Vector2 mouse = GetMousePosition();
+        Vector2 pos = PixToHex(mouse.x, mouse.y, TILE_SIZE, canvasOrigin);
+        tower_a = pos.x;
+        tower_b = pos.y;
     }
     break;
 
@@ -714,6 +737,9 @@ void UpdateDrawFrame(void)
         // TODO: Gameplay
         DrawHexGrid();
         DrawTower(tower_a, tower_b, 0);
+
+        // UI
+        DrawInventory();
     }
     break;
 
@@ -740,7 +766,6 @@ void UpdateDrawFrame(void)
                    (Rectangle){0, 0, (float)target.texture.width, (float)target.texture.height}, (Vector2){0, 0}, 0.0f, WHITE);
 
     // TODO: Draw everything that requires to be drawn at this point, maybe UI?
-    DrawRectangleRec(inventoryRect, GRAY);
 
     EndDrawing();
     //----------------------------------------------------------------------------------
