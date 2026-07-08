@@ -42,7 +42,11 @@
 #define HEX_SPAWN_MAX_TIME 1.0f
 
 #define HEX_GRID_RADIUS 4
-#define HEX_SIZE 40.0f
+#define TILE_SIZE 40.0f
+
+#define RGB(r, g, b) (Color){r, g, b, 255}
+#define MAX(a, b) (a > b ? a : b)
+#define MIN(a, b) (a < b ? a : b)
 
 //----------------------------------------------------------------------------------
 // Types and Structures Definition
@@ -106,6 +110,16 @@ static const float hexTierSizes[HEX_TIER_COUNT] = {16.0f, 23.0f, 32.0f, 45.0f}; 
 static Hex hexes[HEX_MAX_COUNT];
 static float hexSpawnTimer = 0.0f;
 
+
+// Game UI
+static Rectangle inventoryRect = {0, screenHeight - 120, screenWidth, 120};
+static Vector2 canvasOrigin = {screenWidth / 2.0f, (screenHeight / 2.0f) - 60.0f };
+
+// Temp
+static int tower_a = 0;
+static int tower_b = 0;
+
+
 // TODO: Define global variables here, recommended to make them static
 
 //----------------------------------------------------------------------------------
@@ -137,8 +151,12 @@ static void UpdateHexBackground(float dt);
 static void DrawHexBackground(void);
 
 // Game screen
-static Vector2 HexToPixel(int a, int b, float size, Vector2 origin);
+static Vector2 HexToPix(int a, int b, float size, Vector2 origin);
+static Vector2 PixToHex(int x, int y, float size, Vector2 origin);
 static void DrawHexGrid(void);
+
+// Gameplay
+static void DrawTower(int a, int b, int type);
 
 //------------------------------------------------------------------------------------
 // Program main entry point
@@ -559,7 +577,7 @@ static void DrawHexBackground(void)
     }
 }
 
-static Vector2 HexToPixel(int a, int b, float size, Vector2 origin)
+static Vector2 HexToPix(int a, int b, float size, Vector2 origin)
 {
     float x = size * 1.5f * (float)a;
     float y = size * sqrtf(3.0f) * ((float)b + (float)a / 2.0f);
@@ -569,10 +587,47 @@ static Vector2 HexToPixel(int a, int b, float size, Vector2 origin)
     return (Vector2){origin.x + rotated.x, origin.y + rotated.y};
 }
 
+static Vector2 PixToHex(int x, int y, float size, Vector2 origin) {
+    /* works at the center of tiles, but inaccurate
+    Vector2 unrotated = Vector2Rotate((Vector2){x - origin.x, y - origin.y}, -30.0f * DEG2RAD);
+    
+    float a = unrotated.x / (1.5f * size);
+    float b = unrotated.y / (sqrt(3) * size) - a / 2;
+    
+    return (Vector2){a, b};
+    */
+
+    float dist = INFINITY;
+    float af, bf;
+
+    // go over the whole grid to find which tile is the closest :skull:
+    for (int a = -HEX_GRID_RADIUS; a <= HEX_GRID_RADIUS; a++) {
+        int bMin = -HEX_GRID_RADIUS;
+        if (-a - HEX_GRID_RADIUS > bMin) {
+            bMin = -a - HEX_GRID_RADIUS;
+        }
+
+        int bMax = HEX_GRID_RADIUS;
+        if (-a + HEX_GRID_RADIUS < bMax) {
+            bMax = -a + HEX_GRID_RADIUS;
+        }
+
+        for (int b = bMin; b <= bMax; b++) {
+            Vector2 center = HexToPix(a, b, TILE_SIZE, canvasOrigin);
+
+            if ((center.x - x)*(center.x - x) + (center.y - y)*(center.y - y) < dist) {
+                dist = (center.x - x)*(center.x - x) + (center.y - y)*(center.y - y);
+                af = a;
+                bf = b;
+            }
+        }
+    }
+
+    return (Vector2){af, bf};
+}
+
 static void DrawHexGrid(void)
 {
-    Vector2 origin = {screenWidth / 2.0f, (screenHeight / 2.0f) - 75.0f };
-
     for (int a = -HEX_GRID_RADIUS; a <= HEX_GRID_RADIUS; a++)
     {
         int bMin = -HEX_GRID_RADIUS;
@@ -589,11 +644,17 @@ static void DrawHexGrid(void)
 
         for (int b = bMin; b <= bMax; b++)
         {
-            Vector2 center = HexToPixel(a, b, HEX_SIZE - 2, origin);
+            Vector2 center = HexToPix(a, b, TILE_SIZE, canvasOrigin);
 
-            DrawPolyLinesEx(center, 6, HEX_SIZE, 30.0f, HEX_LINE_THICK, Fade(LIME, 0.08f));
+            DrawPolyLinesEx(center, 6, TILE_SIZE + 2, 30.0f, HEX_LINE_THICK, RGB(157, 237, 181));
         }
     }
+}
+
+static void DrawTower(int a, int b, int type) {
+    Vector2 pos = HexToPix(a, b, TILE_SIZE, canvasOrigin);
+    DrawPoly(pos, 6, TILE_SIZE + 2, 30.0f, Fade(RGB(157, 237, 181), 0.45f));
+    DrawPolyLinesEx(pos, 3, TILE_SIZE * 0.7f, 30.0f, 4, BLUE);
 }
 
 // Update and draw frame
@@ -616,6 +677,10 @@ void UpdateDrawFrame(void)
     case SCREEN_GAMEPLAY:
     {
         // TODO: Gameplay
+        if(IsKeyDown(KEY_SPACE)) {
+            tower_a = PixToHex(GetMousePosition().x, GetMousePosition().y, TILE_SIZE, canvasOrigin).x;
+            tower_b = PixToHex(GetMousePosition().x, GetMousePosition().y, TILE_SIZE, canvasOrigin).y;
+        }
     }
     break;
 
@@ -648,6 +713,7 @@ void UpdateDrawFrame(void)
     {
         // TODO: Gameplay
         DrawHexGrid();
+        DrawTower(tower_a, tower_b, 0);
     }
     break;
 
@@ -674,6 +740,7 @@ void UpdateDrawFrame(void)
                    (Rectangle){0, 0, (float)target.texture.width, (float)target.texture.height}, (Vector2){0, 0}, 0.0f, WHITE);
 
     // TODO: Draw everything that requires to be drawn at this point, maybe UI?
+    DrawRectangleRec(inventoryRect, GRAY);
 
     EndDrawing();
     //----------------------------------------------------------------------------------
