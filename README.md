@@ -1,6 +1,6 @@
 -----------------------------------
 
-**Template by [@raysan5](https://github.com/raysan5): [raylib-game-template](https://github.com/raysan5/raylib-game-template)**
+**Template by [@raysan5](https://github.com/raysan5): [raylib-gamejam-template](https://github.com/raysan5/raylib-gamejam-template)**
 
 _Copyright (c) 2014-2026 Ramon Santamaria ([@raysan5](https://github.com/raysan5))_
 -----------------------------------
