@@ -680,7 +680,7 @@ static void DrawTower(int a, int b, int type) {
 
 static Vector2 DraggableTower(int x, int y, int type, int id) {
     Rectangle hitbox = {x - 50, y - 50, 100, 80};
-    DrawRectangleRec(hitbox, Fade(BLACK, 0.1f)); // show hitbox to debug
+    // DrawRectangleRec(hitbox, Fade(BLACK, 0.1f)); // show hitbox to debug
 
     Color color = RGB(251, 84, 43);
     switch (type) {
@@ -691,24 +691,33 @@ static Vector2 DraggableTower(int x, int y, int type, int id) {
         default: break;
     }
 
-    DrawPoly((Vector2){x, y}, 3, 48.0f, 30.0f, color);
-
+    
     // detect mouse in bounds, drag, and return the position on the grid when the mouse is released
-
+    
+    Vector2 mouse = GetMousePosition();
     if (draggedTowerId == id) {
-        Vector2 mouse = GetMousePosition();
         Vector2 pos = PixToHex(mouse.x, mouse.y, TILE_SIZE, canvasOrigin);
         if (mouse.y < screenHeight - 120)
             DrawTower(pos.x, pos.y, type);
-
+        else {
+            x = (int)mouse.x;
+            y = (int)mouse.y;
+        }        
         if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
             draggedTowerId = 0;
             if (mouse.y < screenHeight - 120) // when released above the inventory, return position (tower placed)
-                return pos;
+            return pos;
         }
-    } else if (CheckCollisionPointRec(GetMousePosition(), hitbox) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-        draggedTowerId = id;
+    } else {
+        if (CheckCollisionPointRec(GetMousePosition(), hitbox)) {
+            color.a = 230;
+            DrawPoly((Vector2){x, y}, 3, 48.0f, 30.0f, WHITE);
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+                draggedTowerId = id;
+        }
     }
+    if (mouse.y >= screenHeight - 120 || draggedTowerId != id)
+        DrawPoly((Vector2){x, y}, 3, 48.0f, 30.0f, color);
 
     return NULL_TILE;
 }
