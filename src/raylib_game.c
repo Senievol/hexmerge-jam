@@ -165,6 +165,7 @@ static Vector2 HexToPix(int a, int b, float size, Vector2 origin);
 static Vector2 PixToHex(int x, int y, float size, Vector2 origin);
 static void DrawHexGrid(void);
 static void DrawInventory(void);
+static void DrawTowers(void);
 
 // Gameplay
 static void DrawTower(int a, int b, int type);
@@ -660,12 +661,6 @@ static void DrawHexGrid(void)
             DrawPolyLinesEx(center, 6, TILE_SIZE + 2, 30.0f, HEX_LINE_THICK, RGB(157, 237, 181));
         }
     }
-
-    Tower tower;
-    for (int i = 0; i < towerCount; i++) {
-        tower = towers[i];
-        DrawTower(tower.x, tower.y, tower.type);
-    }
 }
 
 static void DrawTower(int a, int b, int type) {
@@ -703,12 +698,13 @@ static Vector2 DraggableTower(int x, int y, int type, int id) {
     if (draggedTowerId == id) {
         Vector2 mouse = GetMousePosition();
         Vector2 pos = PixToHex(mouse.x, mouse.y, TILE_SIZE, canvasOrigin);
+        if (mouse.y < screenHeight - 120)
+            DrawTower(pos.x, pos.y, type);
+
         if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
             draggedTowerId = 0;
             if (mouse.y < screenHeight - 120) // when released above the inventory, return position (tower placed)
                 return pos;
-        } else {
-            DrawTower(pos.x, pos.y, type);
         }
     } else if (CheckCollisionPointRec(GetMousePosition(), hitbox) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         draggedTowerId = id;
@@ -731,6 +727,14 @@ static void DrawInventory(void) {
         if (!IS_NULL_TILE(tile)) {
             towers[towerCount++] = (Tower){tile.x, tile.y, type};
         }
+    }
+}
+
+static void DrawTowers(void) {
+    Tower tower;
+    for (int i = 0; i < towerCount; i++) {
+        tower = towers[i];
+        DrawTower(tower.x, tower.y, tower.type);
     }
 }
 
@@ -787,6 +791,7 @@ void UpdateDrawFrame(void)
     {
         // TODO: Gameplay
         DrawHexGrid();
+        DrawTowers();
 
         // UI
         DrawInventory();
