@@ -34,6 +34,8 @@
 #define LOG(...)
 #endif
 
+#define GLSL_VERSION 100
+
 #define HEX_MAX_COUNT 240
 #define HEX_TIER_COUNT 4
 #define HEX_LINE_THICK 4.0f
@@ -43,6 +45,9 @@
 
 #define HEX_GRID_RADIUS 4
 #define TILE_SIZE 40.0f
+
+#define ICON_BUTTON_SIZE 56.0f
+#define ICON_BUTTON_MARGIN 20.0f
 
 #define NULL_TILE (Vector2){99, 99}
 #define IS_NULL_TILE(tile) (tile.x == NULL_TILE.x && tile.y == NULL_TILE.y)
@@ -70,6 +75,13 @@ typedef enum
     TRANSITION_IN   // Fading from black
 } TransitionPhase;
 
+// Icon shown inside a GuiIconButton
+typedef enum
+{
+    ICON_HELP = 0,
+    ICON_SETTINGS
+} IconType;
+
 typedef struct Hex
 {
     bool active;
@@ -80,7 +92,8 @@ typedef struct Hex
     int sizeTier;   // index into hexTierSizes
 } Hex;
 
-typedef struct Tower {
+typedef struct Tower
+{
     int x;
     int y;
     int type;
@@ -111,6 +124,14 @@ static float settingsCloseHover = 0.0f;
 static bool settingsOpen = false; // Should the pop up be open?
 static float popupAnim = 0.0f;
 
+// Gameplay top bar icon buttons (How To Play / Settings)
+static float howToPlayButtonHover = 0.0f;
+static float settingsIconButtonHover = 0.0f;
+static float howToPlayCloseHover = 0.0f;
+
+static bool howToPlayOpen = false; // Should the How To Play pop up be open?
+static float howToPlayAnim = 0.0f;
+
 static TransitionPhase transitionPhase = TRANSITION_NONE;
 static float transitionTimer = 0.0f;
 static const float TRANSITION_DURATION = 0.35f; // seconds per half, out -> in
@@ -119,6 +140,26 @@ static const float hexTierSizes[HEX_TIER_COUNT] = {16.0f, 23.0f, 32.0f, 45.0f}; 
 static Hex hexes[HEX_MAX_COUNT];
 static float hexSpawnTimer = 0.0f;
 
+static const char *blurFShaderSrc100 =
+    "#version 100\n"
+    "precision mediump float;\n"
+    "varying vec2 fragTexCoord;\n"
+    "uniform sampler2D texture0;\n"
+    "uniform vec2 resolution;\n"
+    "uniform float blurSize;\n"
+    "void main()\n"
+    "{\n"
+    "    vec2 texel = 1.0 / resolution;\n"
+    "    vec4 color = vec4(0.0);\n"
+    "    float samples = 0.0;\n"
+    "    for (int x = -2; x <= 2; x++)\n"
+    "    for (int y = -2; y <= 2; y++)\n"
+    "    {\n"
+    "        color += texture2D(texture0, fragTexCoord + vec2(float(x), float(y)) * texel * blurSize);\n"
+    "        samples += 1.0;\n"
+    "    }\n"
+    "    gl_FragColor = color / samples;\n"
+    "}\n";
 
 // Game Interface
 static Vector2 canvasOrigin = {screenWidth / 2.0f, (screenHeight / 2.0f) - 60.0f};
@@ -127,8 +168,6 @@ static int draggedTowerId = 0;
 // Game objects
 static Tower towers[256];
 static int towerCount = 0;
-
-
 
 // TODO: Define global variables here, recommended to make them static
 
@@ -140,14 +179,20 @@ static void UpdateDrawFrame(void); // Update and Draw one frame
 // Small math helpers
 static float EaseOutCubic(float t);
 static bool GuiSimpleButton(Rectangle bounds, const char *text, int fontSize, float *hoverAnim, bool interactive);
+static bool GuiIconButton(Rectangle bounds, IconType icon, float *hoverAnim, bool interactive);
+static void DrawSlidersIcon(Vector2 center, float size, Color lineColor, Color knobFillColor);
 
 // Title screen
 static void UpdateTitleScreen(float dt);
 static void DrawTitleScreen(void);
 
-// Settings popup (overlays the title screen)
+// Settings popup (overlays the title screen or gameplay screen)
 static void UpdateSettingsPopup(float dt);
 static void DrawSettingsPopup(void);
+
+// How To Play popup (overlays the gameplay screen)
+static void UpdateHowToPlayPopup(float dt);
+static void DrawHowToPlayPopup(void);
 
 // Screen transition (title -> gameplay fade)
 static void UpdateTransition(float dt);
@@ -159,6 +204,10 @@ static void SpawnHexAt(int index);
 static void InitHexBackground(void);
 static void UpdateHexBackground(float dt);
 static void DrawHexBackground(void);
+static RenderTexture2D hexLayer = {0};
+static Shader blurShader = {0};
+static int blurResolutionLoc = -1;
+static int blurSizeLoc = -1;
 
 // Game screen
 static Vector2 HexToPix(int a, int b, float size, Vector2 origin);
@@ -166,6 +215,7 @@ static Vector2 PixToHex(int x, int y, float size, Vector2 origin);
 static void DrawHexGrid(void);
 static void DrawInventory(void);
 static void DrawTowers(void);
+static void DrawGameplayTopBar(bool interactive);
 
 // Gameplay
 static void DrawTower(int a, int b, int type);
@@ -190,6 +240,18 @@ int main(void)
     target = LoadRenderTexture(screenWidth, screenHeight);
     SetTextureFilter(target.texture, TEXTURE_FILTER_BILINEAR);
 
+    hexLayer = LoadRenderTexture(screenWidth, screenHeight);
+    SetTextureFilter(hexLayer.texture, TEXTURE_FILTER_BILINEAR);
+
+    blurShader = LoadShaderFromMemory(NULL, blurFShaderSrc100);
+    blurResolutionLoc = GetShaderLocation(blurShader, "resolution");
+    blurSizeLoc = GetShaderLocation(blurShader, "blurSize");
+
+    float res[2] = {(float)screenWidth, (float)screenHeight};
+    SetShaderValue(blurShader, blurResolutionLoc, res, SHADER_UNIFORM_VEC2);
+    float blurAmount = 1.0f; // strengthen blur
+    SetShaderValue(blurShader, blurSizeLoc, &blurAmount, SHADER_UNIFORM_FLOAT);
+
     InitHexBackground();
 
 #if defined(PLATFORM_WEB)
@@ -207,6 +269,8 @@ int main(void)
 
     // De-Initialization
     //--------------------------------------------------------------------------------------
+    UnloadRenderTexture(hexLayer);
+    UnloadShader(blurShader);
     UnloadRenderTexture(target);
 
     // TODO: Unload all loaded resources at this point
@@ -279,6 +343,85 @@ static bool GuiSimpleButton(Rectangle bounds, const char *text, int fontSize, fl
     return clicked;
 }
 
+static void DrawSlidersIcon(Vector2 center, float size, Color lineColor, Color knobFillColor)
+{
+    const int lineCount = 3;
+    const float halfW = size * 0.5f;
+    const float lineThick = size * 0.11f;
+    const float knobRadius = size * 0.13f;
+    const float knobRingThick = size * 0.03f;
+    const float knobPos[lineCount] = {0.32f, 0.68f, 0.5f};
+ 
+    for (int i = 0; i < lineCount; i++)
+    {
+        float y = center.y - size * 0.5f + size * ((float)(i + 1) / (lineCount + 1));
+ 
+        Vector2 start = {center.x - halfW, y};
+        Vector2 end = {center.x + halfW, y};
+        DrawLineEx(start, end, lineThick, lineColor);
+ 
+        Vector2 knobCenter = {start.x + (end.x - start.x) * knobPos[i], y};
+        Rectangle knobRect = {
+            knobCenter.x - knobRadius, knobCenter.y - knobRadius,
+            knobRadius * 2.0f, knobRadius * 2.0f};
+ 
+        DrawRectangleRec(knobRect, knobFillColor);
+        DrawRectangleLinesEx(knobRect, knobRingThick, lineColor);
+    }
+}
+
+
+static bool GuiIconButton(Rectangle bounds, IconType icon, float *hoverAnim, bool interactive)
+{
+    Vector2 mouse = GetMousePosition();
+    bool hovered = interactive && CheckCollisionPointRec(mouse, bounds);
+    bool clicked = hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+
+    float dt = GetFrameTime();
+    float target = hovered ? 1.0f : 0.0f;
+    const float hoverSpeed = 7.0f;
+    if (*hoverAnim < target)
+        *hoverAnim = fminf(*hoverAnim + hoverSpeed * dt, target);
+    else
+        *hoverAnim = fmaxf(*hoverAnim - hoverSpeed * dt, target);
+
+    Color fillColor, borderColor, iconColor;
+    if (!interactive)
+    {
+        fillColor = LIGHTGRAY;
+        borderColor = GRAY;
+        iconColor = GRAY;
+    }
+    else
+    {
+        fillColor = (Color){
+            (unsigned char)Lerp((float)RAYWHITE.r, (float)LIGHTGRAY.r, *hoverAnim),
+            (unsigned char)Lerp((float)RAYWHITE.g, (float)LIGHTGRAY.g, *hoverAnim),
+            (unsigned char)Lerp((float)RAYWHITE.b, (float)LIGHTGRAY.b, *hoverAnim),
+            255};
+        borderColor = BLACK;
+        iconColor = BLACK;
+    }
+
+    DrawRectangleRec(bounds, fillColor);
+    DrawRectangleLinesEx(bounds, 3, borderColor);
+
+    Vector2 center = {bounds.x + bounds.width / 2.0f, bounds.y + bounds.height / 2.0f};
+
+    if (icon == ICON_HELP)
+    {
+        int fontSize = (int)(bounds.height * 0.68f);
+        int textWidth = MeasureText("?", fontSize);
+        DrawText("?", (int)(center.x - textWidth / 2.0f), (int)(center.y - fontSize / 2.0f), fontSize, iconColor);
+    }
+    else // ICON_SETTINGS
+    {
+        DrawSlidersIcon(center, bounds.width * 0.78f, iconColor, fillColor);
+    }
+
+    return clicked;
+}
+
 static void StartTransitionToGameplay(void)
 {
     if (transitionPhase == TRANSITION_NONE)
@@ -337,8 +480,7 @@ static void UpdateTitleScreen(float dt)
 
 static void DrawTitleScreen(void)
 {
-    // Title screen input is disabled while the settings popup is showing/animating
-    // or while a screen transition is in progress.
+    // Title screen input is disabled while the settings popup is showing/animating or while a screen transition is in progress.
     bool inputBlocked = (transitionPhase != TRANSITION_NONE) || settingsOpen || (popupAnim > 0.01f);
 
     // Animated 2 color title
@@ -427,6 +569,68 @@ static void DrawSettingsPopup(void)
     if (GuiSimpleButton(closeButton, "Close", 28, &settingsCloseHover, closeInteractive))
     {
         settingsOpen = false;
+    }
+}
+
+static void UpdateHowToPlayPopup(float dt)
+{
+    float target = howToPlayOpen ? 1.0f : 0.0f;
+    const float popupSpeed = 5.0f;
+    if (howToPlayAnim < target)
+        howToPlayAnim = fminf(howToPlayAnim + popupSpeed * dt, target);
+    else
+        howToPlayAnim = fmaxf(howToPlayAnim - popupSpeed * dt, target);
+}
+
+static void DrawHowToPlayPopup(void)
+{
+    if (howToPlayAnim <= 0.001f)
+        return;
+
+    float eased = EaseOutCubic(howToPlayAnim);
+
+    DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.4f * howToPlayAnim));
+
+    Rectangle basePopupRect = {screenWidth / 2.0f - 260, screenHeight / 2.0f - 230, 520, 460};
+
+    float scale = Lerp(0.85f, 1.0f, eased);
+    float w = basePopupRect.width * scale;
+    float h = basePopupRect.height * scale;
+    Rectangle popupRect = {
+        basePopupRect.x + (basePopupRect.width - w) / 2.0f,
+        basePopupRect.y + (basePopupRect.height - h) / 2.0f,
+        w, h};
+
+    DrawRectangleRec(popupRect, Fade(RAYWHITE, eased));
+    DrawRectangleLinesEx(popupRect, 4, Fade(BLACK, eased));
+
+    const char *popupTitle = "How To Play";
+    int popupTitleSize = 32;
+    int popupTitleWidth = MeasureText(popupTitle, popupTitleSize);
+    DrawText(popupTitle, (int)(popupRect.x + (popupRect.width - popupTitleWidth) / 2.0f),
+             (int)(popupRect.y + 20), popupTitleSize, Fade(BLACK, eased));
+
+    // TODO: Replace this placeholder
+    const char *helpText =
+        "Lorem ipsum dolor sit amet, consectetur dddddddddddd\n"
+        "adipiscing elit. Sed do eiusmod tempor\n"
+        "incididunt ut labore et dolore magna aliqua.\n"
+        "\n"
+        "Ut enim ad minim veniam, quis nostrud\n"
+        "exercitation ullamco laboris nisi ut aliquip\n"
+        "ex ea commodo consequat.\n"
+        "\n"
+        "Duis aute irure dolor in reprehenderit in\n"
+        "voluptate velit esse cillum dolore eu fugiat\n"
+        "nulla pariatur excepteur sint occaecat.";
+
+    DrawText(helpText, (int)(popupRect.x + 24), (int)(popupRect.y + 72), 18, Fade(BLACK, eased));
+
+    Rectangle closeButton = {popupRect.x + popupRect.width / 2 - 100, popupRect.y + popupRect.height - 70, 200, 50};
+    bool closeInteractive = (howToPlayAnim > 0.95f);
+    if (GuiSimpleButton(closeButton, "Close", 28, &howToPlayCloseHover, closeInteractive))
+    {
+        howToPlayOpen = false;
     }
 }
 
@@ -599,36 +803,33 @@ static Vector2 HexToPix(int a, int b, float size, Vector2 origin)
     return (Vector2){origin.x + rotated.x, origin.y + rotated.y};
 }
 
-static Vector2 PixToHex(int x, int y, float size, Vector2 origin) {
-    /* works at the center of tiles, but inaccurate
-    Vector2 unrotated = Vector2Rotate((Vector2){x - origin.x, y - origin.y}, -30.0f * DEG2RAD);
-    
-    float a = unrotated.x / (1.5f * size);
-    float b = unrotated.y / (sqrt(3) * size) - a / 2;
-    
-    return (Vector2){a, b};
-    */
-
+static Vector2 PixToHex(int x, int y, float size, Vector2 origin)
+{
     float dist = INFINITY;
     float af, bf;
 
     // go over the whole grid to find which tile is the closest :skull:
-    for (int a = -HEX_GRID_RADIUS; a <= HEX_GRID_RADIUS; a++) {
+    for (int a = -HEX_GRID_RADIUS; a <= HEX_GRID_RADIUS; a++)
+    {
         int bMin = -HEX_GRID_RADIUS;
-        if (-a - HEX_GRID_RADIUS > bMin) {
+        if (-a - HEX_GRID_RADIUS > bMin)
+        {
             bMin = -a - HEX_GRID_RADIUS;
         }
 
         int bMax = HEX_GRID_RADIUS;
-        if (-a + HEX_GRID_RADIUS < bMax) {
+        if (-a + HEX_GRID_RADIUS < bMax)
+        {
             bMax = -a + HEX_GRID_RADIUS;
         }
 
-        for (int b = bMin; b <= bMax; b++) {
+        for (int b = bMin; b <= bMax; b++)
+        {
             Vector2 center = HexToPix(a, b, TILE_SIZE, canvasOrigin);
 
-            if ((center.x - x)*(center.x - x) + (center.y - y)*(center.y - y) < dist) {
-                dist = (center.x - x)*(center.x - x) + (center.y - y)*(center.y - y);
+            if ((center.x - x) * (center.x - x) + (center.y - y) * (center.y - y) < dist)
+            {
+                dist = (center.x - x) * (center.x - x) + (center.y - y) * (center.y - y);
                 af = a;
                 bf = b;
             }
@@ -663,53 +864,80 @@ static void DrawHexGrid(void)
     }
 }
 
-static void DrawTower(int a, int b, int type) {
+static void DrawTower(int a, int b, int type)
+{
     Vector2 pos = HexToPix(a, b, TILE_SIZE, canvasOrigin);
     DrawPoly(pos, 6, TILE_SIZE + 2, 30.0f, Fade(RGB(157, 237, 181), 0.45f));
 
     Color color = RGB(251, 84, 43);
-    switch (type) {
-        case 1: color = RGB(91, 41, 126); break;
-        case 2: color = RGB(41, 72, 126); break;
-        case 3: color = RGB(38, 109, 49); break;
-        case 4: color = RGB(196, 108, 16); break;
-        default: break;
+    switch (type)
+    {
+    case 1:
+        color = RGB(91, 41, 126);
+        break;
+    case 2:
+        color = RGB(41, 72, 126);
+        break;
+    case 3:
+        color = RGB(38, 109, 49);
+        break;
+    case 4:
+        color = RGB(196, 108, 16);
+        break;
+    default:
+        break;
     }
     DrawPoly(pos, 3, TILE_SIZE * 0.7f, 30.0f, color);
 }
 
-static Vector2 DraggableTower(int x, int y, int type, int id) {
+static Vector2 DraggableTower(int x, int y, int type, int id)
+{
     Rectangle hitbox = {x - 50, y - 50, 100, 80};
     // DrawRectangleRec(hitbox, Fade(BLACK, 0.1f)); // show hitbox to debug
 
     Color color = RGB(251, 84, 43);
-    switch (type) {
-        case 1: color = RGB(91, 41, 126); break;
-        case 2: color = RGB(41, 72, 126); break;
-        case 3: color = RGB(38, 109, 49); break;
-        case 4: color = RGB(196, 108, 16); break;
-        default: break;
+    switch (type)
+    {
+    case 1:
+        color = RGB(91, 41, 126);
+        break;
+    case 2:
+        color = RGB(41, 72, 126);
+        break;
+    case 3:
+        color = RGB(38, 109, 49);
+        break;
+    case 4:
+        color = RGB(196, 108, 16);
+        break;
+    default:
+        break;
     }
 
-    
     // detect mouse in bounds, drag, and return the position on the grid when the mouse is released
-    
+
     Vector2 mouse = GetMousePosition();
-    if (draggedTowerId == id) {
+    if (draggedTowerId == id)
+    {
         Vector2 pos = PixToHex(mouse.x, mouse.y, TILE_SIZE, canvasOrigin);
         if (mouse.y < screenHeight - 120)
             DrawTower(pos.x, pos.y, type);
-        else {
+        else
+        {
             x = (int)mouse.x;
             y = (int)mouse.y;
-        }        
-        if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+        }
+        if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT))
+        {
             draggedTowerId = 0;
             if (mouse.y < screenHeight - 120) // when released above the inventory, return position (tower placed)
-            return pos;
+                return pos;
         }
-    } else {
-        if (CheckCollisionPointRec(GetMousePosition(), hitbox)) {
+    }
+    else
+    {
+        if (CheckCollisionPointRec(GetMousePosition(), hitbox))
+        {
             color.a = 230;
             DrawPoly((Vector2){x, y}, 3, 48.0f, 30.0f, WHITE);
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
@@ -722,28 +950,52 @@ static Vector2 DraggableTower(int x, int y, int type, int id) {
     return NULL_TILE;
 }
 
-static void DrawInventory(void) {
+static void DrawInventory(void)
+{
     Rectangle inventoryRect = {0, screenHeight - 120, screenWidth, 120};
     DrawRectangleRec(inventoryRect, RGB(138, 159, 179));
     DrawRectangleLinesEx(inventoryRect, 6, DARKGRAY);
 
     float itemsY = inventoryRect.y + inventoryRect.height / 2 + 10;
     Vector2 tile;
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 5; i++)
+    {
         int type = i;
         int id = i + 1;
-        tile = DraggableTower(96 + 132*i, itemsY, type, id);
-        if (!IS_NULL_TILE(tile)) {
+        tile = DraggableTower(96 + 132 * i, itemsY, type, id);
+        if (!IS_NULL_TILE(tile))
+        {
             towers[towerCount++] = (Tower){tile.x, tile.y, type};
         }
     }
 }
 
-static void DrawTowers(void) {
+static void DrawTowers(void)
+{
     Tower tower;
-    for (int i = 0; i < towerCount; i++) {
+    for (int i = 0; i < towerCount; i++)
+    {
         tower = towers[i];
         DrawTower(tower.x, tower.y, tower.type);
+    }
+}
+
+static void DrawGameplayTopBar(bool interactive)
+{
+    Rectangle howToPlayButton = {ICON_BUTTON_MARGIN, ICON_BUTTON_MARGIN, ICON_BUTTON_SIZE, ICON_BUTTON_SIZE};
+    if (GuiIconButton(howToPlayButton, ICON_HELP, &howToPlayButtonHover, interactive))
+    {
+        howToPlayOpen = true;
+    }
+
+    Rectangle settingsIconButton = {
+        screenWidth - ICON_BUTTON_MARGIN - ICON_BUTTON_SIZE,
+        ICON_BUTTON_MARGIN,
+        ICON_BUTTON_SIZE,
+        ICON_BUTTON_SIZE};
+    if (GuiIconButton(settingsIconButton, ICON_SETTINGS, &settingsIconButtonHover, interactive))
+    {
+        settingsOpen = true;
     }
 }
 
@@ -767,7 +1019,6 @@ void UpdateDrawFrame(void)
     case SCREEN_GAMEPLAY:
     {
         // TODO: Gameplay
-
     }
     break;
 
@@ -778,12 +1029,19 @@ void UpdateDrawFrame(void)
     }
 
     UpdateSettingsPopup(dt);
+    UpdateHowToPlayPopup(dt);
     UpdateTransition(dt);
     //----------------------------------------------------------------------------------
     // Draw
     //----------------------------------------------------------------------------------
-    // Render game screen to a texture,
-    // it could be useful for scaling or further shader postprocessing
+    if (currentScreen == SCREEN_TITLE)
+    {
+        BeginTextureMode(hexLayer);
+        ClearBackground(RAYWHITE);
+        DrawHexBackground();
+        EndTextureMode();
+    }
+
     BeginTextureMode(target);
     ClearBackground(RAYWHITE);
 
@@ -791,19 +1049,28 @@ void UpdateDrawFrame(void)
     {
     case SCREEN_TITLE:
     {
+        // Blurred background
+        BeginShaderMode(blurShader);
+        DrawTexturePro(hexLayer.texture,
+                       (Rectangle){0, 0, (float)hexLayer.texture.width, -(float)hexLayer.texture.height},
+                       (Rectangle){0, 0, (float)screenWidth, (float)screenHeight},
+                       (Vector2){0, 0}, 0.0f, WHITE);
+        EndShaderMode();
+
         DrawTitleScreen();
-        DrawHexBackground();
     }
     break;
 
     case SCREEN_GAMEPLAY:
     {
-        // TODO: Gameplay
+        // Popups + transition disable input on the top bar and grid
+        bool inputBlocked = (transitionPhase != TRANSITION_NONE) || settingsOpen || howToPlayOpen ||
+                             (popupAnim > 0.01f) || (howToPlayAnim > 0.01f);
+
         DrawHexGrid();
         DrawTowers();
-
-        // UI
         DrawInventory();
+        DrawGameplayTopBar(!inputBlocked);
     }
     break;
 
@@ -814,10 +1081,8 @@ void UpdateDrawFrame(void)
     }
 
     DrawSettingsPopup();
-
+    DrawHowToPlayPopup();
     DrawTransitionOverlay();
-
-    // DrawRectangleLinesEx((Rectangle){0, 0, screenWidth, screenHeight}, 16, BLACK);
 
     EndTextureMode();
 
