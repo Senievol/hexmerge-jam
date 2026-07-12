@@ -12,6 +12,7 @@ _Copyright (c) 2014-2026 Ramon Santamaria ([@raysan5](https://github.com/raysan5
 ### Description
 
 Place and merge towers to protect your base against enemies!
+This game is very unfinished, sadly we didn't have enough free time this week to do everything we wanted to.
 
 ### Features
 
@@ -40,7 +41,7 @@ Keyboard:
 
 ### Links
 
- - itch.io Release: $(itch.io Game Page)
+ - itch.io Release: [https://senievol.itch.io/hex-madness](https://senievol.itch.io/hex-madness)
 
 ### License
 
