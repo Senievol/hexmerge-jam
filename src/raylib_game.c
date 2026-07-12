@@ -85,6 +85,9 @@
 #define PAL_GREEN1   RGB(204, 255, 102)
 #define PAL_GREEN2   RGB(153, 255, 153)
 #define PAL_BLUE3    RGB(102, 255, 255)
+#define PAL_GRAY1    GRAY
+#define PAL_GRAY2    DARKGRAY
+
 
 //----------------------------------------------------------------------------------
 // Types and Structures Definition
@@ -301,6 +304,9 @@ static void UpdateCore(float dt);
 static void DrawCore(void);
 static void DamageCore(int amount);
 
+// Towers
+static void UpdateTowers(float dt);
+
 // Enemy system
 static void InitEnemies(void);
 static void SpawnEnemy(void);
@@ -310,6 +316,8 @@ static void DrawEnemies(void);
 // Ending screen
 static void ResetGame(void);
 static void DrawEndingScreen(void);
+
+
 //------------------------------------------------------------------------------------
 // Program main entry point
 //------------------------------------------------------------------------------------
@@ -654,7 +662,7 @@ static void DrawSettingsPopup(void)
         basePopupRect.y + (basePopupRect.height - h) / 2.0f,
         w, h};
 
-    DrawRectangleRec(popupRect, Fade(RAYWHITE, eased));
+    DrawRectangleRec(popupRect, Fade(WHITE, eased));
     DrawRectangleLinesEx(popupRect, 4, Fade(BLACK, eased));
 
     const char *popupTitle = "Settings";
@@ -700,7 +708,7 @@ static void DrawHowToPlayPopup(void)
         basePopupRect.y + (basePopupRect.height - h) / 2.0f,
         w, h};
 
-    DrawRectangleRec(popupRect, Fade(RAYWHITE, eased));
+    DrawRectangleRec(popupRect, Fade(WHITE, eased));
     DrawRectangleLinesEx(popupRect, 4, Fade(BLACK, eased));
 
     const char *popupTitle = "How To Play";
@@ -1090,9 +1098,17 @@ static void DrawInventory(void)
         int type = i;
         int id = i + 1;
         tile = DraggableTower(96 + 132 * i, itemsY, type, id);
-        if (!IS_NULL_TILE(tile))
-        {
-            towers[towerCount++] = (Tower){tile.x, tile.y, type};
+        if (!IS_NULL_TILE(tile)) // tower getting placed
+        {   
+            bool valid = true;
+            for (int i = 0; i < towerCount; i++) {
+                if (towers[i].x == tile.x && towers[i].y == tile.y) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (valid)
+                towers[towerCount++] = (Tower){tile.x, tile.y, type};
         }
     }
 }
@@ -1144,10 +1160,10 @@ static void DrawCore(void)
 {
     Vector2 pos = HexToPix(0, 0, TILE_SIZE, canvasOrigin);
 
-    // Flash red when hit else greyish
+    // Flash red when hit else purple
     float flash = core.hitFlashT / CORE_HIT_FLASH_DURATION;
-    Color baseColor = RGB(70, 70, 90);
-    Color flashColor = RGB(220, 40, 40);
+    Color baseColor = PAL_PURPLE;
+    Color flashColor = PAL_RED2;
     Color coreColor = {
         (unsigned char)Lerp((float)baseColor.r, (float)flashColor.r, flash),
         (unsigned char)Lerp((float)baseColor.g, (float)flashColor.g, flash),
@@ -1167,7 +1183,7 @@ static void DrawCore(void)
     barFg.width *= Clamp(healthRatio, 0.0f, 1.0f);
 
     DrawRectangleRec(barBg, Fade(BLACK, 0.35f));
-    DrawRectangleRec(barFg, RGB(60, 200, 90));
+    DrawRectangleRec(barFg, PAL_GREEN2);
     DrawRectangleLinesEx(barBg, 2, BLACK);
 }
 
@@ -1315,7 +1331,7 @@ static void DrawEnemies(void)
             continue;
 
         // TODO: Replace placeholder circle to a sprite with DrawTexturePro
-        DrawCircleV(e->worldPos, ENEMY_RADIUS, RGB(200, 40, 40));
+        DrawCircleV(e->worldPos, ENEMY_RADIUS, PAL_RED1);
         DrawCircleLines((int)e->worldPos.x, (int)e->worldPos.y, ENEMY_RADIUS, BLACK);
 
         // Health bar above each enemy
@@ -1324,8 +1340,9 @@ static void DrawEnemies(void)
         Rectangle hpBg = {e->worldPos.x - w / 2.0f, e->worldPos.y - ENEMY_RADIUS - 10.0f, w, 4.0f};
         Rectangle hpFg = hpBg;
         hpFg.width *= Clamp(ratio, 0.0f, 1.0f);
-        DrawRectangleRec(hpBg, Fade(BLACK, 0.4f));
-        DrawRectangleRec(hpFg, RGB(60, 200, 90));
+        DrawRectangleRec(hpBg, Fade(BLACK, 0.35f));
+        DrawRectangleRec(hpFg, PAL_GREEN2);
+        DrawRectangleLinesEx(hpBg, 1, BLACK);
     }
 }
 
@@ -1380,6 +1397,10 @@ static void DrawEndingScreen(void)
     }
 }
 
+static void UpdateTowers(float dt) {
+
+}
+
 // Update and draw frame
 void UpdateDrawFrame(void)
 {
@@ -1401,6 +1422,7 @@ void UpdateDrawFrame(void)
 
     case SCREEN_GAMEPLAY:
     {
+        UpdateTowers(dt);
         UpdateEnemies(dt);
         UpdateCore(dt);
     }
@@ -1460,8 +1482,8 @@ void UpdateDrawFrame(void)
         DrawHexGrid();
         DrawCore();
         DrawTowers();
-        DrawEnemies();
         DrawInventory();
+        DrawEnemies();
         DrawGameplayTopBar(!inputBlocked);
     }
     break;
@@ -1486,7 +1508,7 @@ void UpdateDrawFrame(void)
 
     // Render to screen (main framebuffer)
     BeginDrawing();
-    ClearBackground(RAYWHITE);
+    ClearBackground(WHITE);
 
     // Draw render texture to screen, scaled if required
     DrawTexturePro(target.texture, (Rectangle){0, 0, (float)target.texture.width, -(float)target.texture.height},
