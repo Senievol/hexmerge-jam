@@ -70,6 +70,22 @@
 #define MAX(a, b) (a > b ? a : b)
 #define MIN(a, b) (a < b ? a : b)
 
+// Palette (https://lospec.com/palette-list/old-box-of-pastels)
+#define PAL_RED1     RGB(255,  51,  51)
+#define PAL_RED2     RGB(255, 102, 102)
+#define PAL_RED3     RGB(255, 153, 153)
+#define PAL_PINK     RGB(255, 153, 204)
+#define PAL_PURPLE   RGB(204, 153, 255)
+#define PAL_BLUE1    RGB(153, 153, 255)
+#define PAL_BLUE2    RGB(102, 153, 255)
+#define PAL_ORANGE1  RGB(255, 102,  51)
+#define PAL_ORANGE2  RGB(255, 153, 102)
+#define PAL_ORANGE3  RGB(255, 204, 102)
+#define PAL_YELLOW   RGB(255, 255, 102)
+#define PAL_GREEN1   RGB(204, 255, 102)
+#define PAL_GREEN2   RGB(153, 255, 153)
+#define PAL_BLUE3    RGB(102, 255, 255)
+
 //----------------------------------------------------------------------------------
 // Types and Structures Definition
 //----------------------------------------------------------------------------------
@@ -231,8 +247,8 @@ static void UpdateDrawFrame(void); // Update and Draw one frame
 
 // Small math helpers
 static float EaseOutCubic(float t);
-static bool GuiSimpleButton(Rectangle bounds, const char *text, int fontSize, float *hoverAnim, bool interactive);
-static bool GuiIconButton(Rectangle bounds, IconType icon, float *hoverAnim, bool interactive);
+static bool GuiSimpleButton(Rectangle bounds, const char *text, int fontSize, float *hoverAnim, bool interactive, Color color1, Color color2);
+static bool GuiIconButton(Rectangle bounds, IconType icon, float *hoverAnim, bool interactive, Color color1, Color color2);
 static void DrawSlidersIcon(Vector2 center, float size, Color lineColor, Color knobFillColor);
 
 // Title screen
@@ -367,7 +383,7 @@ static float EaseOutCubic(float t)
     return 1.0f - inv * inv * inv;
 }
 
-static bool GuiSimpleButton(Rectangle bounds, const char *text, int fontSize, float *hoverAnim, bool interactive)
+static bool GuiSimpleButton(Rectangle bounds, const char *text, int fontSize, float *hoverAnim, bool interactive, Color color1, Color color2)
 {
     Vector2 mouse = GetMousePosition();
     bool hovered = interactive && CheckCollisionPointRec(mouse, bounds);
@@ -392,17 +408,17 @@ static bool GuiSimpleButton(Rectangle bounds, const char *text, int fontSize, fl
     Color fillColor, borderColor, textColor;
     if (!interactive)
     {
-        fillColor = LIGHTGRAY;
-        borderColor = GRAY;
-        textColor = GRAY;
+        fillColor = color1;
+        borderColor = BLACK;
+        textColor = BLACK;
     }
     else
     {
-        // Color change Raywhite to Lightgray as hover goes up
+        // Color change from color1 to color2 as hover goes up
         fillColor = (Color){
-            (unsigned char)Lerp((float)RAYWHITE.r, (float)LIGHTGRAY.r, *hoverAnim),
-            (unsigned char)Lerp((float)RAYWHITE.g, (float)LIGHTGRAY.g, *hoverAnim),
-            (unsigned char)Lerp((float)RAYWHITE.b, (float)LIGHTGRAY.b, *hoverAnim),
+            (unsigned char)Lerp((float)color1.r, (float)color2.r, *hoverAnim),
+            (unsigned char)Lerp((float)color1.g, (float)color2.g, *hoverAnim),
+            (unsigned char)Lerp((float)color1.b, (float)color2.b, *hoverAnim),
             255};
         borderColor = BLACK;
         textColor = BLACK;
@@ -447,7 +463,7 @@ static void DrawSlidersIcon(Vector2 center, float size, Color lineColor, Color k
 }
 
 
-static bool GuiIconButton(Rectangle bounds, IconType icon, float *hoverAnim, bool interactive)
+static bool GuiIconButton(Rectangle bounds, IconType icon, float *hoverAnim, bool interactive, Color color1, Color color2)
 {
     Vector2 mouse = GetMousePosition();
     bool hovered = interactive && CheckCollisionPointRec(mouse, bounds);
@@ -464,16 +480,17 @@ static bool GuiIconButton(Rectangle bounds, IconType icon, float *hoverAnim, boo
     Color fillColor, borderColor, iconColor;
     if (!interactive)
     {
-        fillColor = LIGHTGRAY;
-        borderColor = GRAY;
-        iconColor = GRAY;
+        fillColor = color1;
+        borderColor = BLACK;
+        iconColor = BLACK;
     }
     else
     {
+        // Color change from color1 to color2 as hover goes up
         fillColor = (Color){
-            (unsigned char)Lerp((float)RAYWHITE.r, (float)LIGHTGRAY.r, *hoverAnim),
-            (unsigned char)Lerp((float)RAYWHITE.g, (float)LIGHTGRAY.g, *hoverAnim),
-            (unsigned char)Lerp((float)RAYWHITE.b, (float)LIGHTGRAY.b, *hoverAnim),
+            (unsigned char)Lerp((float)color1.r, (float)color2.r, *hoverAnim),
+            (unsigned char)Lerp((float)color1.g, (float)color2.g, *hoverAnim),
+            (unsigned char)Lerp((float)color1.b, (float)color2.b, *hoverAnim),
             255};
         borderColor = BLACK;
         iconColor = BLACK;
@@ -597,12 +614,12 @@ static void DrawTitleScreen(void)
     Rectangle playButton = {(float)buttonX, (float)firstButtonY, (float)buttonWidth, (float)buttonHeight};
     Rectangle settingsButton = {(float)buttonX, (float)(firstButtonY + (buttonHeight + buttonSpacing)), (float)buttonWidth, (float)buttonHeight};
 
-    if (GuiSimpleButton(playButton, "Play", 32, &playButtonHover, !inputBlocked))
+    if (GuiSimpleButton(playButton, "Play", 32, &playButtonHover, !inputBlocked, PAL_RED2, PAL_RED3))
     {
         StartTransitionToGameplay();
     }
 
-    if (GuiSimpleButton(settingsButton, "Settings", 32, &settingsButtonHover, !inputBlocked))
+    if (GuiSimpleButton(settingsButton, "Settings", 32, &settingsButtonHover, !inputBlocked, PAL_RED2, PAL_RED3))
     {
         settingsOpen = true;
     }
@@ -648,7 +665,7 @@ static void DrawSettingsPopup(void)
 
     Rectangle closeButton = {popupRect.x + popupRect.width / 2 - 100, popupRect.y + popupRect.height - 80, 200, 50};
     bool closeInteractive = (popupAnim > 0.95f);
-    if (GuiSimpleButton(closeButton, "Close", 28, &settingsCloseHover, closeInteractive))
+    if (GuiSimpleButton(closeButton, "Close", 28, &settingsCloseHover, closeInteractive, PAL_BLUE1, PAL_PURPLE))
     {
         settingsOpen = false;
     }
@@ -710,7 +727,7 @@ static void DrawHowToPlayPopup(void)
 
     Rectangle closeButton = {popupRect.x + popupRect.width / 2 - 100, popupRect.y + popupRect.height - 70, 200, 50};
     bool closeInteractive = (howToPlayAnim > 0.95f);
-    if (GuiSimpleButton(closeButton, "Close", 28, &howToPlayCloseHover, closeInteractive))
+    if (GuiSimpleButton(closeButton, "Close", 28, &howToPlayCloseHover, closeInteractive, PAL_BLUE1, PAL_PURPLE))
     {
         howToPlayOpen = false;
     }
@@ -864,7 +881,7 @@ static void UpdateHexBackground(float dt)
 
 static void DrawHexBackground(void)
 {
-    Color hexColor = Fade(BLACK, 0.08f);
+    Color hexColor = PAL_ORANGE1;
 
     for (int i = 0; i < HEX_MAX_COUNT; i++)
     {
@@ -969,7 +986,7 @@ static void DrawHexGrid(void)
         {
             Vector2 center = HexToPix(a, b, TILE_SIZE, canvasOrigin);
 
-            DrawPolyLinesEx(center, 6, TILE_SIZE + 2, 30.0f, HEX_LINE_THICK, RGB(157, 237, 181));
+            DrawPolyLinesEx(center, 6, TILE_SIZE + 2, 30.0f, HEX_LINE_THICK, PAL_BLUE2);
         }
     }
 }
@@ -977,7 +994,7 @@ static void DrawHexGrid(void)
 static void DrawTower(int a, int b, int type)
 {
     Vector2 pos = HexToPix(a, b, TILE_SIZE, canvasOrigin);
-    DrawPoly(pos, 6, TILE_SIZE + 2, 30.0f, Fade(RGB(157, 237, 181), 0.45f));
+    DrawPoly(pos, 6, TILE_SIZE + 2, 30.0f, PAL_BLUE2);
 
     Color color = RGB(251, 84, 43);
     switch (type)
@@ -1063,8 +1080,8 @@ static Vector2 DraggableTower(int x, int y, int type, int id)
 static void DrawInventory(void)
 {
     Rectangle inventoryRect = {0, screenHeight - 120, screenWidth, 120};
-    DrawRectangleRec(inventoryRect, RGB(138, 159, 179));
-    DrawRectangleLinesEx(inventoryRect, 6, DARKGRAY);
+    DrawRectangleRec(inventoryRect, PAL_ORANGE3);
+    DrawRectangleLinesEx(inventoryRect, 6, PAL_ORANGE2);
 
     float itemsY = inventoryRect.y + inventoryRect.height / 2 + 10;
     Vector2 tile;
@@ -1157,7 +1174,7 @@ static void DrawCore(void)
 static void DrawGameplayTopBar(bool interactive)
 {
     Rectangle howToPlayButton = {ICON_BUTTON_MARGIN, ICON_BUTTON_MARGIN, ICON_BUTTON_SIZE, ICON_BUTTON_SIZE};
-    if (GuiIconButton(howToPlayButton, ICON_HELP, &howToPlayButtonHover, interactive))
+    if (GuiIconButton(howToPlayButton, ICON_HELP, &howToPlayButtonHover, interactive, PAL_BLUE1, PAL_PURPLE))
     {
         howToPlayOpen = true;
     }
@@ -1167,7 +1184,7 @@ static void DrawGameplayTopBar(bool interactive)
         ICON_BUTTON_MARGIN,
         ICON_BUTTON_SIZE,
         ICON_BUTTON_SIZE};
-    if (GuiIconButton(settingsIconButton, ICON_SETTINGS, &settingsIconButtonHover, interactive))
+    if (GuiIconButton(settingsIconButton, ICON_SETTINGS, &settingsIconButtonHover, interactive, PAL_BLUE1, PAL_PURPLE))
     {
         settingsOpen = true;
     }
@@ -1338,7 +1355,7 @@ static void DrawEndingScreen(void)
     const char *subtitle = "The core has been destroyed.";
     int subtitleFontSize = 26;
     int subtitleWidth = MeasureText(subtitle, subtitleFontSize);
-    DrawText(subtitle, (screenWidth - subtitleWidth) / 2, 190 + titleFontSize + 10, subtitleFontSize, GRAY);
+    DrawText(subtitle, (screenWidth - subtitleWidth) / 2, 190 + titleFontSize + 10, subtitleFontSize, BLACK);
 
     const int buttonWidth = 300;
     const int buttonHeight = 70;
@@ -1349,13 +1366,13 @@ static void DrawEndingScreen(void)
     Rectangle restartButton = {(float)buttonX, (float)firstButtonY, (float)buttonWidth, (float)buttonHeight};
     Rectangle menuButton = {(float)buttonX, (float)(firstButtonY + (buttonHeight + buttonSpacing)), (float)buttonWidth, (float)buttonHeight};
 
-    if (GuiSimpleButton(restartButton, "Restart", 32, &endingRestartHover, !inputBlocked))
+    if (GuiSimpleButton(restartButton, "Restart", 32, &endingRestartHover, !inputBlocked, PAL_RED2, PAL_RED3))
     {
         ResetGame();
         StartTransition(SCREEN_GAMEPLAY); // Skip the title screen and go back to game
     }
 
-    if (GuiSimpleButton(menuButton, "Main Menu", 32, &endingMenuHover, !inputBlocked))
+    if (GuiSimpleButton(menuButton, "Main Menu", 32, &endingMenuHover, !inputBlocked, PAL_RED2, PAL_RED3))
     {
         ResetGame();
         titleAnimTimer = 0.0f; // Replay the title screen intro anim
@@ -1406,16 +1423,17 @@ void UpdateDrawFrame(void)
     //----------------------------------------------------------------------------------
     // Draw
     //----------------------------------------------------------------------------------
+    
     if (currentScreen == SCREEN_TITLE)
     {
         BeginTextureMode(hexLayer);
-        ClearBackground(RAYWHITE);
+        ClearBackground(PAL_ORANGE2);
         DrawHexBackground();
         EndTextureMode();
     }
 
     BeginTextureMode(target);
-    ClearBackground(RAYWHITE);
+    ClearBackground(PAL_GREEN2);
 
     switch (currentScreen)
     {
@@ -1450,6 +1468,7 @@ void UpdateDrawFrame(void)
 
     case SCREEN_ENDING:
     {
+        ClearBackground(PAL_ORANGE2);
         DrawEndingScreen();
     }
     break;
