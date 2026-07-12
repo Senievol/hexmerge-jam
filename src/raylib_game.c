@@ -207,6 +207,7 @@ static const char *blurFShaderSrc100 =
 // Game Interface
 static Vector2 canvasOrigin = {screenWidth / 2.0f, (screenHeight / 2.0f) - 60.0f};
 static int draggedTowerId = 0;
+static bool inputBlocked = false;
 
 // Game objects
 static Tower towers[256];
@@ -421,11 +422,11 @@ static bool GuiSimpleButton(Rectangle bounds, const char *text, int fontSize, fl
 static void DrawSlidersIcon(Vector2 center, float size, Color lineColor, Color knobFillColor)
 {
     const int lineCount = 3;
+    const float knobPos[3] = {0.32f, 0.68f, 0.5f};
     const float halfW = size * 0.5f;
     const float lineThick = size * 0.11f;
     const float knobRadius = size * 0.13f;
     const float knobRingThick = size * 0.03f;
-    const float knobPos[lineCount] = {0.32f, 0.68f, 0.5f};
  
     for (int i = 0; i < lineCount; i++)
     {
@@ -1036,7 +1037,7 @@ static Vector2 DraggableTower(int x, int y, int type, int id)
             x = (int)mouse.x;
             y = (int)mouse.y;
         }
-        if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT))
+        if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !inputBlocked)
         {
             draggedTowerId = 0;
             if (mouse.y < screenHeight - 120) // when released above the inventory, return position (tower placed)
@@ -1045,7 +1046,7 @@ static Vector2 DraggableTower(int x, int y, int type, int id)
     }
     else
     {
-        if (CheckCollisionPointRec(GetMousePosition(), hitbox))
+        if (CheckCollisionPointRec(GetMousePosition(), hitbox) && !inputBlocked)
         {
             color.a = 230;
             DrawPoly((Vector2){x, y}, 3, 48.0f, 30.0f, WHITE);
@@ -1370,6 +1371,8 @@ void UpdateDrawFrame(void)
     frameCounter++;
     float dt = GetFrameTime();
 
+    if (IsKeyPressed(KEY_F12)) TakeScreenshot("screenshot001.png");
+
     switch (currentScreen)
     {
     case SCREEN_TITLE:
@@ -1433,7 +1436,7 @@ void UpdateDrawFrame(void)
     case SCREEN_GAMEPLAY:
     {
         // Popups + transition disable input on the top bar and grid
-        bool inputBlocked = (transitionPhase != TRANSITION_NONE) || settingsOpen || howToPlayOpen ||
+        inputBlocked = (transitionPhase != TRANSITION_NONE) || settingsOpen || howToPlayOpen ||
                              (popupAnim > 0.01f) || (howToPlayAnim > 0.01f);
 
         DrawHexGrid();
