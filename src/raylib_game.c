@@ -49,6 +49,20 @@
 #define ICON_BUTTON_SIZE 56.0f
 #define ICON_BUTTON_MARGIN 20.0f
 
+#define CORE_MAX_HEALTH 100
+#define CORE_DAMAGE_PER_HIT 10
+#define CORE_HIT_FLASH_DURATION 0.25f
+
+#define ENEMY_MAX_COUNT 128        // Fixed size
+#define ENEMY_SPAWN_MIN_TIME 1.2f
+#define ENEMY_SPAWN_MAX_TIME 2.5f
+#define ENEMY_BASE_SPEED 55.0f     // px/sec
+#define ENEMY_BASE_HEALTH 20.0f
+#define ENEMY_RADIUS 14.0f         // Placeholder circle radius (until sprite is added)
+#define ENEMY_ARRIVE_THRESHOLD 2.0f
+
+#define HEX_RING_TILE_COUNT (HEX_GRID_RADIUS * 6)
+
 #define NULL_TILE (Vector2){99, 99}
 #define IS_NULL_TILE(tile) (tile.x == NULL_TILE.x && tile.y == NULL_TILE.y)
 
@@ -99,6 +113,30 @@ typedef struct Tower
     int type;
 } Tower;
 
+typedef struct Core
+{
+    int health;
+    int maxHealth;
+    int level;       // TODO: Upgrade system
+    float hitFlashT; // Flash duration when damaged
+} Core;
+
+typedef struct Enemy
+{
+    bool active; // Fixed-size pool slot in use?
+
+    int hexA, hexB;
+    int targetA, targetB;
+
+    Vector2 worldPos;
+
+    float speed;    // px/sec
+    float health;   // current health
+    float maxHealth;
+
+    Texture2D texture; // for the sprite
+} Enemy;
+
 // TODO: Define your custom data types here
 
 //----------------------------------------------------------------------------------
@@ -135,6 +173,11 @@ static float howToPlayAnim = 0.0f;
 static TransitionPhase transitionPhase = TRANSITION_NONE;
 static float transitionTimer = 0.0f;
 static const float TRANSITION_DURATION = 0.35f; // seconds per half, out -> in
+static GameScreen transitionTargetScreen = SCREEN_GAMEPLAY; // Which screen to switch to once the fade-out completes
+
+// Ending screen buttons
+static float endingRestartHover = 0.0f;
+static float endingMenuHover = 0.0f;
 
 static const float hexTierSizes[HEX_TIER_COUNT] = {16.0f, 23.0f, 32.0f, 45.0f}; // tier 0..3
 static Hex hexes[HEX_MAX_COUNT];
@@ -169,7 +212,16 @@ static int draggedTowerId = 0;
 static Tower towers[256];
 static int towerCount = 0;
 
-// TODO: Define global variables here, recommended to make them static
+static Core core = {0};
+
+static Enemy enemies[ENEMY_MAX_COUNT];
+static float enemySpawnTimer = 0.0f;
+
+static Vector2 hexRingTiles[HEX_RING_TILE_COUNT];
+static int hexRingTileCount = 0;
+
+static const int hexDirQ[6] = {+1, +1, 0, -1, -1, 0};
+static const int hexDirR[6] = {0, -1, -1, 0, +1, +1};
 
 //----------------------------------------------------------------------------------
 // Module Functions Declaration
@@ -194,10 +246,11 @@ static void DrawSettingsPopup(void);
 static void UpdateHowToPlayPopup(float dt);
 static void DrawHowToPlayPopup(void);
 
-// Screen transition (title -> gameplay fade)
+// Screen transition (fade out -> switch screen -> fade in)
 static void UpdateTransition(float dt);
 static void DrawTransitionOverlay(void);
-static void StartTransitionToGameplay(void);
+static void StartTransition(GameScreen targetScreen);
+static void StartTransitionToGameplay(void); // convenience wrapper (Play button), kept for existing call sites
 
 // Hex background
 static void SpawnHexAt(int index);
@@ -220,6 +273,26 @@ static void DrawGameplayTopBar(bool interactive);
 // Gameplay
 static void DrawTower(int a, int b, int type);
 static Vector2 DraggableTower(int x, int y, int type, int id);
+
+// Pathfinding helper
+static int HexDistance(int a1, int b1, int a2, int b2);
+static Vector2 GetNextStepTowardCore(int a, int b);
+
+// Core
+static void InitCore(void);
+static void UpdateCore(float dt);
+static void DrawCore(void);
+static void DamageCore(int amount);
+
+// Enemy system
+static void InitEnemies(void);
+static void SpawnEnemy(void);
+static void UpdateEnemies(float dt);
+static void DrawEnemies(void);
+
+// Ending screen
+static void ResetGame(void);
+static void DrawEndingScreen(void);
 //------------------------------------------------------------------------------------
 // Program main entry point
 //------------------------------------------------------------------------------------
@@ -253,6 +326,8 @@ int main(void)
     SetShaderValue(blurShader, blurSizeLoc, &blurAmount, SHADER_UNIFORM_FLOAT);
 
     InitHexBackground();
+    InitCore();
+    InitEnemies();
 
 #if defined(PLATFORM_WEB)
     emscripten_set_main_loop(UpdateDrawFrame, 60, 1);
@@ -422,13 +497,19 @@ static bool GuiIconButton(Rectangle bounds, IconType icon, float *hoverAnim, boo
     return clicked;
 }
 
-static void StartTransitionToGameplay(void)
+static void StartTransition(GameScreen targetScreen)
 {
     if (transitionPhase == TRANSITION_NONE)
     {
+        transitionTargetScreen = targetScreen;
         transitionPhase = TRANSITION_OUT;
         transitionTimer = 0.0f;
     }
+}
+
+static void StartTransitionToGameplay(void)
+{
+    StartTransition(SCREEN_GAMEPLAY);
 }
 
 static void UpdateTransition(float dt)
@@ -438,7 +519,7 @@ static void UpdateTransition(float dt)
         transitionTimer += dt;
         if (transitionTimer >= TRANSITION_DURATION)
         {
-            currentScreen = SCREEN_GAMEPLAY;
+            currentScreen = transitionTargetScreen; // Switch to whichever screen was requested
             transitionPhase = TRANSITION_IN;
             transitionTimer = 0.0f;
         }
@@ -839,6 +920,34 @@ static Vector2 PixToHex(int x, int y, float size, Vector2 origin)
     return (Vector2){af, bf};
 }
 
+// Distance between two tiles in axial hex coordinates.
+// Standard formula: (|dq| + |dr| + |dq + dr|) / 2
+static int HexDistance(int a1, int b1, int a2, int b2)
+{
+    int dq = a1 - a2;
+    int dr = b1 - b2;
+    return (abs(dq) + abs(dr) + abs(dq + dr)) / 2;
+}
+
+// Greedy pathfinding, could be replaced by A* or anything else like that
+static Vector2 GetNextStepTowardCore(int a, int b)
+{
+    int currentDist = HexDistance(a, b, 0, 0);
+    if (currentDist == 0)
+        return (Vector2){(float)a, (float)b}; // Already at the core
+
+    for (int dir = 0; dir < 6; dir++)
+    {
+        int na = a + hexDirQ[dir];
+        int nb = b + hexDirR[dir];
+        if (HexDistance(na, nb, 0, 0) < currentDist)
+            return (Vector2){(float)na, (float)nb};
+    }
+
+    // Security but should be unreachable on the grid
+    return (Vector2){(float)a, (float)b};
+}
+
 static void DrawHexGrid(void)
 {
     for (int a = -HEX_GRID_RADIUS; a <= HEX_GRID_RADIUS; a++)
@@ -980,6 +1089,70 @@ static void DrawTowers(void)
     }
 }
 
+static void InitCore(void)
+{
+    core.health = CORE_MAX_HEALTH;
+    core.maxHealth = CORE_MAX_HEALTH;
+    core.level = 1;
+    core.hitFlashT = 0.0f;
+}
+
+static void DamageCore(int amount)
+{
+    core.health -= amount;
+    if (core.health < 0)
+        core.health = 0;
+    core.hitFlashT = CORE_HIT_FLASH_DURATION;
+}
+
+static void UpdateCore(float dt)
+{
+    if (core.hitFlashT > 0.0f)
+    {
+        core.hitFlashT -= dt;
+        if (core.hitFlashT < 0.0f)
+            core.hitFlashT = 0.0f;
+    }
+
+    // TODO: Upgrades (more damage, more range etc...)
+
+    if (core.health <= 0)
+    {
+        StartTransition(SCREEN_ENDING);
+    }
+}
+
+static void DrawCore(void)
+{
+    Vector2 pos = HexToPix(0, 0, TILE_SIZE, canvasOrigin);
+
+    // Flash red when hit else greyish
+    float flash = core.hitFlashT / CORE_HIT_FLASH_DURATION;
+    Color baseColor = RGB(70, 70, 90);
+    Color flashColor = RGB(220, 40, 40);
+    Color coreColor = {
+        (unsigned char)Lerp((float)baseColor.r, (float)flashColor.r, flash),
+        (unsigned char)Lerp((float)baseColor.g, (float)flashColor.g, flash),
+        (unsigned char)Lerp((float)baseColor.b, (float)flashColor.b, flash),
+        255};
+
+    // TODO: Replace by a sprite with DrawTexturePro
+    DrawPoly(pos, 6, TILE_SIZE * 0.8f, 30.0f, coreColor);
+    DrawPolyLinesEx(pos, 6, TILE_SIZE * 0.8f, 30.0f, HEX_LINE_THICK, BLACK);
+
+    // Health bar above the core
+    float barWidth = TILE_SIZE * 1.6f;
+    float barHeight = 8.0f;
+    Rectangle barBg = {pos.x - barWidth / 2.0f, pos.y - TILE_SIZE - 20.0f, barWidth, barHeight};
+    float healthRatio = (core.maxHealth > 0) ? ((float)core.health / (float)core.maxHealth) : 0.0f;
+    Rectangle barFg = barBg;
+    barFg.width *= Clamp(healthRatio, 0.0f, 1.0f);
+
+    DrawRectangleRec(barBg, Fade(BLACK, 0.35f));
+    DrawRectangleRec(barFg, RGB(60, 200, 90));
+    DrawRectangleLinesEx(barBg, 2, BLACK);
+}
+
 static void DrawGameplayTopBar(bool interactive)
 {
     Rectangle howToPlayButton = {ICON_BUTTON_MARGIN, ICON_BUTTON_MARGIN, ICON_BUTTON_SIZE, ICON_BUTTON_SIZE};
@@ -996,6 +1169,196 @@ static void DrawGameplayTopBar(bool interactive)
     if (GuiIconButton(settingsIconButton, ICON_SETTINGS, &settingsIconButtonHover, interactive))
     {
         settingsOpen = true;
+    }
+}
+
+static void InitEnemies(void)
+{
+    for (int i = 0; i < ENEMY_MAX_COUNT; i++)
+        enemies[i].active = false;
+
+    hexRingTileCount = 0;
+    for (int a = -HEX_GRID_RADIUS; a <= HEX_GRID_RADIUS; a++)
+    {
+        int bMin = -HEX_GRID_RADIUS;
+        if (-a - HEX_GRID_RADIUS > bMin)
+            bMin = -a - HEX_GRID_RADIUS;
+
+        int bMax = HEX_GRID_RADIUS;
+        if (-a + HEX_GRID_RADIUS < bMax)
+            bMax = -a + HEX_GRID_RADIUS;
+
+        for (int b = bMin; b <= bMax; b++)
+        {
+            if (HexDistance(a, b, 0, 0) == HEX_GRID_RADIUS && hexRingTileCount < HEX_RING_TILE_COUNT)
+            {
+                hexRingTiles[hexRingTileCount++] = (Vector2){(float)a, (float)b};
+            }
+        }
+    }
+
+    enemySpawnTimer = ENEMY_SPAWN_MIN_TIME;
+}
+
+// Spawn a monster on one of the outer side tile
+static void SpawnEnemy(void)
+{
+    if (hexRingTileCount == 0)
+        return; // safety check
+
+    int slot = -1;
+    for (int i = 0; i < ENEMY_MAX_COUNT; i++)
+    {
+        if (!enemies[i].active)
+        {
+            slot = i;
+            break;
+        }
+    }
+    if (slot == -1)
+        return; // full -> skip
+
+    Vector2 spawnTile = hexRingTiles[GetRandomValue(0, hexRingTileCount - 1)];
+    int a = (int)spawnTile.x;
+    int b = (int)spawnTile.y;
+
+    Enemy *e = &enemies[slot];
+    e->active = true;
+    e->hexA = a;
+    e->hexB = b;
+    e->worldPos = HexToPix(a, b, TILE_SIZE, canvasOrigin);
+    e->speed = ENEMY_BASE_SPEED;
+    e->maxHealth = ENEMY_BASE_HEALTH;
+    e->health = ENEMY_BASE_HEALTH;
+    e->texture = (Texture2D){0}; // TODO: assign a loaded sprite once available
+
+    Vector2 next = GetNextStepTowardCore(a, b);
+    e->targetA = (int)next.x;
+    e->targetB = (int)next.y;
+}
+
+// Spawning, movement between tiles, path & core damage if at the core
+static void UpdateEnemies(float dt)
+{
+    // Spawn timer
+    enemySpawnTimer -= dt;
+    if (enemySpawnTimer <= 0.0f)
+    {
+        SpawnEnemy();
+        enemySpawnTimer = (float)GetRandomValue((int)(ENEMY_SPAWN_MIN_TIME * 100), (int)(ENEMY_SPAWN_MAX_TIME * 100)) / 100.0f;
+    }
+
+    for (int i = 0; i < ENEMY_MAX_COUNT; i++)
+    {
+        Enemy *e = &enemies[i];
+        if (!e->active)
+            continue;
+        // Measure the gap
+        Vector2 targetWorld = HexToPix(e->targetA, e->targetB, TILE_SIZE, canvasOrigin);
+        Vector2 toTarget = Vector2Subtract(targetWorld, e->worldPos);
+        float dist = Vector2Length(toTarget);
+
+        if (dist <= ENEMY_ARRIVE_THRESHOLD)
+        {
+            // Arrived or still walking?
+            e->hexA = e->targetA;
+            e->hexB = e->targetB;
+            e->worldPos = targetWorld;
+
+            if (e->hexA == 0 && e->hexB == 0)
+            {
+                // Reached the core? Damage then dies
+                DamageCore(CORE_DAMAGE_PER_HIT);
+                e->active = false;
+                continue;
+            }
+
+            Vector2 next = GetNextStepTowardCore(e->hexA, e->hexB);
+            e->targetA = (int)next.x;
+            e->targetB = (int)next.y;
+        }
+        else
+        {
+            Vector2 dir = Vector2Scale(toTarget, 1.0f / dist); // normalize
+            float step = e->speed * dt; // how far can it move next frame
+            if (step > dist)
+                step = dist; // clamp so no overshoot
+            e->worldPos = Vector2Add(e->worldPos, Vector2Scale(dir, step));
+        }
+    }
+}
+
+static void DrawEnemies(void)
+{
+    for (int i = 0; i < ENEMY_MAX_COUNT; i++)
+    {
+        Enemy *e = &enemies[i];
+        if (!e->active)
+            continue;
+
+        // TODO: Replace placeholder circle to a sprite with DrawTexturePro
+        DrawCircleV(e->worldPos, ENEMY_RADIUS, RGB(200, 40, 40));
+        DrawCircleLines((int)e->worldPos.x, (int)e->worldPos.y, ENEMY_RADIUS, BLACK);
+
+        // Health bar above each enemy
+        float ratio = (e->maxHealth > 0) ? (e->health / e->maxHealth) : 0.0f;
+        float w = ENEMY_RADIUS * 2.0f;
+        Rectangle hpBg = {e->worldPos.x - w / 2.0f, e->worldPos.y - ENEMY_RADIUS - 10.0f, w, 4.0f};
+        Rectangle hpFg = hpBg;
+        hpFg.width *= Clamp(ratio, 0.0f, 1.0f);
+        DrawRectangleRec(hpBg, Fade(BLACK, 0.4f));
+        DrawRectangleRec(hpFg, RGB(60, 200, 90));
+    }
+}
+
+static void ResetGame(void)
+{
+    InitCore();
+    InitEnemies();
+
+    towerCount = 0;
+    draggedTowerId = 0;
+
+    // "Reset" the button after a screen_XXX switch
+    endingRestartHover = 0.0f;
+    endingMenuHover = 0.0f;
+}
+
+static void DrawEndingScreen(void)
+{
+    // Disable input during transition
+    bool inputBlocked = (transitionPhase != TRANSITION_NONE);
+
+    const char *title = "Game Over";
+    int titleFontSize = 80;
+    int titleWidth = MeasureText(title, titleFontSize);
+    DrawText(title, (screenWidth - titleWidth) / 2, 190, titleFontSize, MAROON);
+
+    const char *subtitle = "The core has been destroyed.";
+    int subtitleFontSize = 26;
+    int subtitleWidth = MeasureText(subtitle, subtitleFontSize);
+    DrawText(subtitle, (screenWidth - subtitleWidth) / 2, 190 + titleFontSize + 10, subtitleFontSize, GRAY);
+
+    const int buttonWidth = 300;
+    const int buttonHeight = 70;
+    const int buttonSpacing = 30;
+    const int buttonX = (screenWidth - buttonWidth) / 2;
+    const int firstButtonY = 400;
+
+    Rectangle restartButton = {(float)buttonX, (float)firstButtonY, (float)buttonWidth, (float)buttonHeight};
+    Rectangle menuButton = {(float)buttonX, (float)(firstButtonY + (buttonHeight + buttonSpacing)), (float)buttonWidth, (float)buttonHeight};
+
+    if (GuiSimpleButton(restartButton, "Restart", 32, &endingRestartHover, !inputBlocked))
+    {
+        ResetGame();
+        StartTransition(SCREEN_GAMEPLAY); // Skip the title screen and go back to game
+    }
+
+    if (GuiSimpleButton(menuButton, "Main Menu", 32, &endingMenuHover, !inputBlocked))
+    {
+        ResetGame();
+        titleAnimTimer = 0.0f; // Replay the title screen intro anim
+        StartTransition(SCREEN_TITLE);
     }
 }
 
@@ -1018,12 +1381,18 @@ void UpdateDrawFrame(void)
 
     case SCREEN_GAMEPLAY:
     {
-        // TODO: Gameplay
+        UpdateEnemies(dt);
+        UpdateCore(dt);
+    }
+    break;
+
+    case SCREEN_ENDING:
+    {
+        // All handled in DrawEndingScreen()
     }
     break;
 
     case SCREEN_LOGO:
-    case SCREEN_ENDING:
     default:
         break;
     }
@@ -1068,14 +1437,21 @@ void UpdateDrawFrame(void)
                              (popupAnim > 0.01f) || (howToPlayAnim > 0.01f);
 
         DrawHexGrid();
+        DrawCore();
         DrawTowers();
+        DrawEnemies();
         DrawInventory();
         DrawGameplayTopBar(!inputBlocked);
     }
     break;
 
-    case SCREEN_LOGO:
     case SCREEN_ENDING:
+    {
+        DrawEndingScreen();
+    }
+    break;
+
+    case SCREEN_LOGO:
     default:
         break;
     }
