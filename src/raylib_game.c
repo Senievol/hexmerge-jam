@@ -1453,12 +1453,12 @@ static void DrawEndingScreen(void)
 
 static void UpdateTowers(float dt) {
     for (int i = 0; i < towerCount; i++) {
-        Tower tower = towers[i];
-        Vector2 towerPos = HexToPix(tower.x, tower.y, TILE_SIZE, canvasOrigin);
+        Tower *tower = &towers[i]; 
+        Vector2 towerPos = HexToPix(tower->x, tower->y, TILE_SIZE, canvasOrigin);
 
-        if (tower.lastShotTime == 0.0) tower.lastShotTime = totalTime;
+        if (tower->lastShotTime == 0.0) tower->lastShotTime = totalTime;
 
-        if (totalTime - tower.lastShotTime > TOWER_RELOAD_TIME) {
+        if (totalTime - tower->lastShotTime > TOWER_RELOAD_TIME) {
             
             Enemy target;
             bool foundTarget = false;
@@ -1471,28 +1471,31 @@ static void UpdateTowers(float dt) {
             }
 
             if (foundTarget) {
-                tower.lastShotTime = totalTime;
+                tower->lastShotTime = totalTime;
 
                 int slot = -1;
                 for (int pi = 0; pi < PROJECTILE_MAX_COUNT; pi++)
                 {
                     if (!projectiles[pi].active)
                     {
-                        slot = i;
+                        slot = pi;
                         break;
                     }
                 }
-                float angle = atan2f(target.worldPos.x - towerPos.x, target.worldPos.y - towerPos.y);
-                tower.angle = angle * RAD2DEG;
-                if (slot >= 0) { // full (-1) -> skip
+                
+                // FIX 3: atan2f takes (y, x)
+                float angle = atan2f(target.worldPos.y - towerPos.y, target.worldPos.x - towerPos.x);
+                tower->angle = angle * RAD2DEG;
+                
+                if (slot >= 0) { 
                     projectiles[slot] = (Projectile){
                         true,
-                        towerPos.x,
-                        towerPos.y,
+                        (int)towerPos.x,
+                        (int)towerPos.y,
                         angle,
-                        50.0f, // speed
-                        8.0f,  // damage
-                        0      // type
+                        150.0f,
+                        8.0f,  
+                        0      
                     };
                 }
             }
@@ -1502,12 +1505,13 @@ static void UpdateTowers(float dt) {
 
 static void UpdateProjectiles(float dt) {
     for (int i = 0; i < PROJECTILE_MAX_COUNT; i++) {
-        Projectile proj = projectiles[i];
+        Projectile *proj = &projectiles[i];
 
-        if (!proj.active) continue;
+        if (!proj->active) continue;
 
-        proj.x += proj.speed * dt * cosf(proj.dir);
-        proj.y += proj.speed * dt * sinf(proj.dir);
+
+        proj->x += proj->speed * dt * cosf(proj->dir);
+        proj->y += proj->speed * dt * sinf(proj->dir);
     }
 }
 
