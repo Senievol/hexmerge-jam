@@ -58,8 +58,11 @@
 #define ENEMY_SPAWN_MAX_TIME 2.5f
 #define ENEMY_BASE_SPEED 55.0f     // px/sec
 #define ENEMY_BASE_HEALTH 20.0f
-#define ENEMY_RADIUS 14.0f         // Placeholder circle radius (until sprite is added)
+#define ENEMY_RADIUS 14.0f
 #define ENEMY_ARRIVE_THRESHOLD 2.0f
+
+#define TOWER_RELOAD_TIME 3.0 // seconds
+#define PROJECTILE_MAX_COUNT 128
 
 #define HEX_RING_TILE_COUNT (HEX_GRID_RADIUS * 6)
 
@@ -85,9 +88,12 @@
 #define PAL_GREEN1   RGB(204, 255, 102)
 #define PAL_GREEN2   RGB(153, 255, 153)
 #define PAL_BLUE3    RGB(102, 255, 255)
+
+// added colors
 #define PAL_GRAY1    GRAY
 #define PAL_GRAY2    DARKGRAY
-
+#define PAL_GREEN3   RGB( 51, 204, 102)
+#define PAL_GREEN4   RGB( 51, 153,  51)
 
 //----------------------------------------------------------------------------------
 // Types and Structures Definition
@@ -130,6 +136,8 @@ typedef struct Tower
     int x;
     int y;
     int type;
+    double lastShotTime;
+    float angle; // degrees
 } Tower;
 
 typedef struct Core
@@ -156,7 +164,15 @@ typedef struct Enemy
     Texture2D texture; // for the sprite
 } Enemy;
 
-// TODO: Define your custom data types here
+typedef struct Projectile {
+    bool active;
+    int x, y;
+    float dir;    // radians
+    float speed;  // px/sec
+    float damage;
+    int type;
+} Projectile;
+
 
 //----------------------------------------------------------------------------------
 // Global Variables Definition (local to this module)
@@ -165,7 +181,7 @@ static const int screenWidth = 720;
 static const int screenHeight = 720;
 
 static RenderTexture2D target = {0}; // Render texture to render our game
-static int frameCounter = 0;
+// static int frameCounter = 0;
 
 static GameScreen currentScreen = SCREEN_TITLE;
 
@@ -202,6 +218,11 @@ static const float hexTierSizes[HEX_TIER_COUNT] = {16.0f, 23.0f, 32.0f, 45.0f}; 
 static Hex hexes[HEX_MAX_COUNT];
 static float hexSpawnTimer = 0.0f;
 
+static RenderTexture2D hexLayer = {0};
+static Shader blurShader = {0};
+static int blurResolutionLoc = -1;
+static int blurSizeLoc = -1;
+
 static const char *blurFShaderSrc100 =
     "#version 100\n"
     "precision mediump float;\n"
@@ -227,6 +248,7 @@ static const char *blurFShaderSrc100 =
 static Vector2 canvasOrigin = {screenWidth / 2.0f, (screenHeight / 2.0f) - 60.0f};
 static int draggedTowerId = 0;
 static bool inputBlocked = false;
+double totalTime;
 
 // Game objects
 static Tower towers[256];
@@ -242,6 +264,23 @@ static int hexRingTileCount = 0;
 
 static const int hexDirQ[6] = {+1, +1, 0, -1, -1, 0};
 static const int hexDirR[6] = {0, -1, -1, 0, +1, +1};
+
+static Projectile projectiles[PROJECTILE_MAX_COUNT];
+
+// Resources
+static Texture texTile;
+static Texture texTower1;
+static Texture texTower2;
+static Texture texTower3;
+static Texture texEnemy1;
+static Texture texEnemy2;
+static Texture texEnemy3;
+static Texture texEnemy4;
+static Texture texEnemy5;
+static Texture texBullet1;
+static Texture texBullet2;
+
+Music music;
 
 //----------------------------------------------------------------------------------
 // Module Functions Declaration
@@ -277,21 +316,16 @@ static void SpawnHexAt(int index);
 static void InitHexBackground(void);
 static void UpdateHexBackground(float dt);
 static void DrawHexBackground(void);
-static RenderTexture2D hexLayer = {0};
-static Shader blurShader = {0};
-static int blurResolutionLoc = -1;
-static int blurSizeLoc = -1;
 
 // Game screen
 static Vector2 HexToPix(int a, int b, float size, Vector2 origin);
 static Vector2 PixToHex(int x, int y, float size, Vector2 origin);
 static void DrawHexGrid(void);
 static void DrawInventory(void);
-static void DrawTowers(void);
 static void DrawGameplayTopBar(bool interactive);
 
 // Gameplay
-static void DrawTower(int a, int b, int type);
+static void DrawTower(int a, int b, int type, float angle);
 static Vector2 DraggableTower(int x, int y, int type, int id);
 
 // Pathfinding helper
@@ -306,6 +340,9 @@ static void DamageCore(int amount);
 
 // Towers
 static void UpdateTowers(float dt);
+static void DrawTowers(void);
+static void UpdateProjectiles(float dt);
+static void DrawProjectiles(void);
 
 // Enemy system
 static void InitEnemies(void);
@@ -317,6 +354,8 @@ static void DrawEnemies(void);
 static void ResetGame(void);
 static void DrawEndingScreen(void);
 
+// Ressources
+static Texture LoadResize(const char* fileName, int width, int height);
 
 //------------------------------------------------------------------------------------
 // Program main entry point
@@ -329,9 +368,25 @@ int main(void)
 
     // Initialization
     //--------------------------------------------------------------------------------------
-    InitWindow(screenWidth, screenHeight, "Hexmerge");
+    InitWindow(screenWidth, screenHeight, "Hex Madness");
 
-    // TODO: Load resources / Initialize variables at this point
+    // Load resources / Initialize variables at this point
+    InitAudioDevice();
+
+    music = LoadMusicStream("resources/music.mp3");
+    music.looping = true;
+
+    texTile = LoadResize("resources/tile_hex.png", (int)(2 * 0.86f * (TILE_SIZE + 2)), 2 * ((int)TILE_SIZE + 2));
+    texTower1 = LoadResize("resources/tower_lvl1.png", (int)(0.6f * 2 * 0.86f * (TILE_SIZE + 2)), 0.6f * 2 * (TILE_SIZE + 2));
+    texTower2 = LoadResize("resources/tower_lvl2.png", (int)(0.6f * 2 * 0.86f * (TILE_SIZE + 2)), 0.6f * 2 * (TILE_SIZE + 2));
+    texTower3 = LoadResize("resources/tower_lvl3.png", (int)(0.6f * 2 * 0.86f * (TILE_SIZE + 2)), 0.6f * 2 * (TILE_SIZE + 2));
+    texEnemy1 = LoadResize("resources/monster1.png", (int)(0.5f * (TILE_SIZE + 2)), 0.5f * (TILE_SIZE + 2));
+    texEnemy2 = LoadResize("resources/monster2.png", (int)(0.5f * (TILE_SIZE + 2)), 0.5f * (TILE_SIZE + 2));
+    texEnemy3 = LoadResize("resources/monster3.png", (int)(0.5f * (TILE_SIZE + 2)), 0.5f * (TILE_SIZE + 2));
+    texEnemy4 = LoadResize("resources/monster4.png", (int)(0.5f * (TILE_SIZE + 2)), 0.5f * (TILE_SIZE + 2));
+    texEnemy5 = LoadResize("resources/monster5.png", (int)(0.5f * (TILE_SIZE + 2)), 0.5f * (TILE_SIZE + 2));
+    texBullet1 = LoadResize("resources/large_bullet.png", 18, 25);
+    texBullet2 = LoadResize("resources/small_bullet.png", 10, 18);
 
     // Render texture to draw, enables screen scaling
     // NOTE: If screen is scaled, mouse input should be scaled proportionally
@@ -373,7 +428,20 @@ int main(void)
     UnloadShader(blurShader);
     UnloadRenderTexture(target);
 
-    // TODO: Unload all loaded resources at this point
+    // Unload all loaded resources at this point
+    UnloadTexture(texTile);
+    UnloadTexture(texTower1);
+    UnloadTexture(texTower2);
+    UnloadTexture(texTower3);
+    UnloadTexture(texEnemy1);
+    UnloadTexture(texEnemy2);
+    UnloadTexture(texEnemy3);
+    UnloadTexture(texEnemy4);
+    UnloadTexture(texEnemy5);
+    UnloadMusicStream(music);
+
+
+    CloseAudioDevice();
 
     CloseWindow(); // Close window and OpenGL context
     //--------------------------------------------------------------------------------------
@@ -384,6 +452,14 @@ int main(void)
 //--------------------------------------------------------------------------------------------
 // Module Functions Definition
 //--------------------------------------------------------------------------------------------
+
+static Texture LoadResize(const char* fileName, int width, int height) {
+    Image img = LoadImage(fileName);
+    ImageResize(&img, width, height);
+    Texture tex = LoadTextureFromImage(img);
+    UnloadImage(img);
+    return tex;
+}
 
 static float EaseOutCubic(float t)
 {
@@ -625,6 +701,7 @@ static void DrawTitleScreen(void)
     if (GuiSimpleButton(playButton, "Play", 32, &playButtonHover, !inputBlocked, PAL_RED2, PAL_RED3))
     {
         StartTransitionToGameplay();
+        PlayMusicStream(music);
     }
 
     if (GuiSimpleButton(settingsButton, "Settings", 32, &settingsButtonHover, !inputBlocked, PAL_RED2, PAL_RED3))
@@ -993,61 +1070,41 @@ static void DrawHexGrid(void)
         for (int b = bMin; b <= bMax; b++)
         {
             Vector2 center = HexToPix(a, b, TILE_SIZE, canvasOrigin);
-
-            DrawPolyLinesEx(center, 6, TILE_SIZE + 2, 30.0f, HEX_LINE_THICK, PAL_BLUE2);
+            // DrawPolyLinesEx(center, 6, TILE_SIZE + 2, 30.0f, HEX_LINE_THICK, PAL_GREEN4);
+            DrawTexture(texTile, center.x - 0.86f * (TILE_SIZE + 2) + 1, center.y - (TILE_SIZE + 2), PAL_YELLOW);  
         }
     }
 }
 
-static void DrawTower(int a, int b, int type)
+static void DrawTower(int a, int b, int type, float angle)
 {
     Vector2 pos = HexToPix(a, b, TILE_SIZE, canvasOrigin);
-    DrawPoly(pos, 6, TILE_SIZE + 2, 30.0f, PAL_BLUE2);
+    DrawTexture(texTile, pos.x - 0.86f * (TILE_SIZE + 2) + 1, pos.y - (TILE_SIZE + 2), PAL_PINK);
 
-    Color color = RGB(251, 84, 43);
-    switch (type)
-    {
-    case 1:
-        color = RGB(91, 41, 126);
-        break;
-    case 2:
-        color = RGB(41, 72, 126);
-        break;
-    case 3:
-        color = RGB(38, 109, 49);
-        break;
-    case 4:
-        color = RGB(196, 108, 16);
-        break;
-    default:
-        break;
+    Texture tex;
+    switch (type) {
+        case 1: tex = texTower1; break;
+        case 2: tex = texTower2; break;
+        case 3: tex = texTower3; break;
+        default: tex = texTower1; break;
     }
-    DrawPoly(pos, 3, TILE_SIZE * 0.7f, 30.0f, color);
+    DrawTextureEx(tex, (Vector2){pos.x - 0.6f * 0.86f * (TILE_SIZE + 2), pos.y - 0.6f * (TILE_SIZE + 2)}, angle, 1.0f, WHITE);
+
 }
 
 static Vector2 DraggableTower(int x, int y, int type, int id)
 {
     Rectangle hitbox = {x - 50, y - 50, 100, 80};
-    // DrawRectangleRec(hitbox, Fade(BLACK, 0.1f)); // show hitbox to debug
 
-    Color color = RGB(251, 84, 43);
-    switch (type)
-    {
-    case 1:
-        color = RGB(91, 41, 126);
-        break;
-    case 2:
-        color = RGB(41, 72, 126);
-        break;
-    case 3:
-        color = RGB(38, 109, 49);
-        break;
-    case 4:
-        color = RGB(196, 108, 16);
-        break;
-    default:
-        break;
+    Texture tex;
+    switch (type) {
+        case 1: tex = texTower1; break;
+        case 2: tex = texTower2; break;
+        case 3: tex = texTower3; break;
+        default: tex = texTower1; break;
     }
+    Color tint = WHITE;
+    float scale = 1.3f;
 
     // detect mouse in bounds, drag, and return the position on the grid when the mouse is released
 
@@ -1056,7 +1113,7 @@ static Vector2 DraggableTower(int x, int y, int type, int id)
     {
         Vector2 pos = PixToHex(mouse.x, mouse.y, TILE_SIZE, canvasOrigin);
         if (mouse.y < screenHeight - 120)
-            DrawTower(pos.x, pos.y, type);
+            DrawTower(pos.x, pos.y, type, 0.0f);
         else
         {
             x = (int)mouse.x;
@@ -1073,14 +1130,14 @@ static Vector2 DraggableTower(int x, int y, int type, int id)
     {
         if (CheckCollisionPointRec(GetMousePosition(), hitbox) && !inputBlocked)
         {
-            color.a = 230;
-            DrawPoly((Vector2){x, y}, 3, 48.0f, 30.0f, WHITE);
+            tint.a = 180;
+            // DrawPoly((Vector2){x, y}, 3, 60.0f, 30.0f, Fade(WHITE, 0.3f));
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
                 draggedTowerId = id;
         }
     }
     if (mouse.y >= screenHeight - 120 || draggedTowerId != id)
-        DrawPoly((Vector2){x, y}, 3, 48.0f, 30.0f, color);
+        DrawTextureEx(tex, (Vector2){x - scale * 0.6f * 0.86f * (TILE_SIZE + 2), y - scale * 0.6f * (TILE_SIZE + 2)}, 0.0f, scale, tint); 
 
     return NULL_TILE;
 }
@@ -1093,10 +1150,11 @@ static void DrawInventory(void)
 
     float itemsY = inventoryRect.y + inventoryRect.height / 2 + 10;
     Vector2 tile;
+    int type, id;
     for (int i = 0; i < 5; i++)
     {
-        int type = i;
-        int id = i + 1;
+        type = MIN(i + 1, 3);
+        id = i + 1;
         tile = DraggableTower(96 + 132 * i, itemsY, type, id);
         if (!IS_NULL_TILE(tile)) // tower getting placed
         {   
@@ -1108,7 +1166,7 @@ static void DrawInventory(void)
                 }
             }
             if (valid)
-                towers[towerCount++] = (Tower){tile.x, tile.y, type};
+                towers[towerCount++] = (Tower){tile.x, tile.y, type, 0.0};
         }
     }
 }
@@ -1119,7 +1177,7 @@ static void DrawTowers(void)
     for (int i = 0; i < towerCount; i++)
     {
         tower = towers[i];
-        DrawTower(tower.x, tower.y, tower.type);
+        DrawTower(tower.x, tower.y, tower.type, tower.angle);
     }
 }
 
@@ -1170,9 +1228,7 @@ static void DrawCore(void)
         (unsigned char)Lerp((float)baseColor.b, (float)flashColor.b, flash),
         255};
 
-    // TODO: Replace by a sprite with DrawTexturePro
-    DrawPoly(pos, 6, TILE_SIZE * 0.8f, 30.0f, coreColor);
-    DrawPolyLinesEx(pos, 6, TILE_SIZE * 0.8f, 30.0f, HEX_LINE_THICK, BLACK);
+    DrawTexture(texTile, pos.x - 0.86f * (TILE_SIZE + 2) + 1, pos.y - (TILE_SIZE + 2), coreColor);
 
     // Health bar above the core
     float barWidth = TILE_SIZE * 1.6f;
@@ -1330,9 +1386,7 @@ static void DrawEnemies(void)
         if (!e->active)
             continue;
 
-        // TODO: Replace placeholder circle to a sprite with DrawTexturePro
-        DrawCircleV(e->worldPos, ENEMY_RADIUS, PAL_RED1);
-        DrawCircleLines((int)e->worldPos.x, (int)e->worldPos.y, ENEMY_RADIUS, BLACK);
+        DrawTexture(texEnemy1, e->worldPos.x - 0.5f * texEnemy1.width, e->worldPos.y - 0.5f * texEnemy1.height, WHITE);
 
         // Health bar above each enemy
         float ratio = (e->maxHealth > 0) ? (e->health / e->maxHealth) : 0.0f;
@@ -1398,7 +1452,79 @@ static void DrawEndingScreen(void)
 }
 
 static void UpdateTowers(float dt) {
+    for (int i = 0; i < towerCount; i++) {
+        Tower tower = towers[i];
+        Vector2 towerPos = HexToPix(tower.x, tower.y, TILE_SIZE, canvasOrigin);
 
+        if (tower.lastShotTime == 0.0) tower.lastShotTime = totalTime;
+
+        if (totalTime - tower.lastShotTime > TOWER_RELOAD_TIME) {
+            
+            Enemy target;
+            bool foundTarget = false;
+            for (int ei = 0; ei < ENEMY_MAX_COUNT; ei++) {
+                if (enemies[ei].active) {
+                    target = enemies[ei];
+                    foundTarget = true;
+                    break;
+                }
+            }
+
+            if (foundTarget) {
+                tower.lastShotTime = totalTime;
+
+                int slot = -1;
+                for (int pi = 0; pi < PROJECTILE_MAX_COUNT; pi++)
+                {
+                    if (!projectiles[pi].active)
+                    {
+                        slot = i;
+                        break;
+                    }
+                }
+                float angle = atan2f(target.worldPos.x - towerPos.x, target.worldPos.y - towerPos.y);
+                tower.angle = angle * RAD2DEG;
+                if (slot >= 0) { // full (-1) -> skip
+                    projectiles[slot] = (Projectile){
+                        true,
+                        towerPos.x,
+                        towerPos.y,
+                        angle,
+                        50.0f, // speed
+                        8.0f,  // damage
+                        0      // type
+                    };
+                }
+            }
+        }
+    }
+}
+
+static void UpdateProjectiles(float dt) {
+    for (int i = 0; i < PROJECTILE_MAX_COUNT; i++) {
+        Projectile proj = projectiles[i];
+
+        if (!proj.active) continue;
+
+        proj.x += proj.speed * dt * cosf(proj.dir);
+        proj.y += proj.speed * dt * sinf(proj.dir);
+    }
+}
+
+static void DrawProjectiles(void) {
+    for (int i = 0; i < PROJECTILE_MAX_COUNT; i++) {
+        Projectile proj = projectiles[i];
+
+        if (!proj.active) continue;
+        
+        Texture tex;
+        switch (proj.type) {
+            case 0: tex = texBullet1; break;
+            case 1: tex = texBullet2; break;
+            default: tex = texBullet1; break;
+        }
+        DrawTextureEx(tex, (Vector2){proj.x, proj.y}, proj.dir * RAD2DEG, 1.0f, WHITE);
+    }
 }
 
 // Update and draw frame
@@ -1406,8 +1532,12 @@ void UpdateDrawFrame(void)
 {
     // Update
     //----------------------------------------------------------------------------------
-    frameCounter++;
+    // frameCounter++;
+
+    totalTime = GetTime();
     float dt = GetFrameTime();
+
+    UpdateMusicStream(music);
 
     if (IsKeyPressed(KEY_F12)) TakeScreenshot("screenshot001.png");
 
@@ -1423,6 +1553,7 @@ void UpdateDrawFrame(void)
     case SCREEN_GAMEPLAY:
     {
         UpdateTowers(dt);
+        UpdateProjectiles(dt);
         UpdateEnemies(dt);
         UpdateCore(dt);
     }
@@ -1455,7 +1586,7 @@ void UpdateDrawFrame(void)
     }
 
     BeginTextureMode(target);
-    ClearBackground(PAL_GREEN2);
+    ClearBackground(PAL_GREEN3);
 
     switch (currentScreen)
     {
@@ -1484,6 +1615,7 @@ void UpdateDrawFrame(void)
         DrawTowers();
         DrawInventory();
         DrawEnemies();
+        DrawProjectiles();
         DrawGameplayTopBar(!inputBlocked);
     }
     break;
